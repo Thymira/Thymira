@@ -66,16 +66,24 @@ def test_console_module_script_is_served_as_javascript() -> None:
     assert response.headers["content-type"].startswith("text/javascript")
 
 
-def test_run_header_only_offers_resume_for_a_resumable_event_state() -> None:
+def test_thread_header_only_offers_resume_for_a_resumable_event_state() -> None:
     """The console must not race the active dispatcher with a second resume request."""
     with _console(_RecordingApi()) as client:
-        response = client.get("/static/js/views/run.js")
+        response = client.get("/static/js/views/thread.js")
 
     assert response.status_code == 200
     source = response.text
     assert "const resumable = isResumableState(state);" in source
     assert re.search(r'resumable\s+\?\s+button\("Resume"', source)
     assert 'active ? button("Resume"' not in source
+
+
+def test_console_stylesheets_are_served_as_css() -> None:
+    with _console(_RecordingApi()) as client:
+        response = client.get("/static/css/tokens.css")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/css")
 
 
 def test_pass_through_forwards_the_callers_authorization_header_unchanged() -> None:

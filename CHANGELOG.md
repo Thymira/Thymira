@@ -17,6 +17,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   colour, the same idiom `.card.is-answerable` already used for review-state cards. The home page
   gains a short "Orchestrators" legend explaining the two colours. New `--thy`/`--mira` CSS custom
   properties and `.tone-thy`/`.tone-mira` utility classes back all of it (`apps/web`).
+- **The web console is thread-first.** `apps/web` is rebuilt around a sidebar of every Run in the
+  project as a thread, grouped by day with filter pills and instant search; opening one shows its
+  transcript folded from the hash-chained event log (prompt, stage dividers, the risk interview,
+  agent groups with their tool calls and reviews nested inside, the MIRA audit, and the outcome)
+  next to one composer whose surface follows the Run's state instead of switching forms; and an
+  inspector that hosts the existing evidence panels (overview, plan, agents, reviews, tools,
+  artifacts, audit, events, usage, inputs, interview) unchanged. A new project page and settings
+  page replace the old rail, a token-based design system adds dark/light theming and motion that
+  respects `prefers-reduced-motion`, and a command palette (`Ctrl+K`) with keyboard shortcuts
+  (`?`) covers navigation. The API gains a read-only `GET /project` route so the shell can name the
+  workspace it serves.
 
 ### Added
 - **`ml-agent` is now routable and audited.** `ThyAgentKind.ML` ("ml-agent") joins the roster

@@ -1,6 +1,6 @@
 /* Thymira Console · evidence panels. Every rule the inspector's renderers (views/tabs/*.js) and
-   the project inputs form rely on, carried over from the old console.css and restyled with the
-   tokens. The renderers were not changed: the class names here are the ones they already emit.
+   the project inputs form rely on, carried over from the previous stylesheet and restyled with
+   the tokens. The renderers were not changed: the class names here are the ones they already emit.
 
    The panels are written for the inspector's narrow column first (single column, capped lists)
    and widen on a wide screen. */
