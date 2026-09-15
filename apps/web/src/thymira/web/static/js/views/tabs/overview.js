@@ -1,33 +1,27 @@
 import { h } from "../../dom.js";
-import { clip, integer, list, percent, plainQuestion, timestamp, usd } from "../../format.js";
+import { clip, integer, list, percent, timestamp, usd } from "../../format.js";
 import {
   auditFindings,
   countBy,
   foldAgents,
-  foldApprovals,
   latestActivityProfile,
   latestRiskProfile,
   latestRunState,
   policyDecisions,
 } from "../../fold.js";
-import { TERMINAL_STATUSES, decisionLabel, decisionTone, riskTone } from "../../status.js";
+import { decisionLabel, decisionTone, riskTone } from "../../status.js";
 import { chips, copyable, decisionTag, empty, findingList, kv, mono, panel, table, tag } from "../../ui.js";
 
+// The panel is the record, not the call to action: the pending question and the pending review are
+// the transcript's and the composer's job, so this panel no longer repeats them as callouts.
 export function renderOverview(ctx) {
   const { run, events } = ctx;
   const state = latestRunState(events);
-  const approvals = foldApprovals(events);
   const { agents } = foldAgents(events);
   const cost = agents.reduce((sum, agent) => sum + agent.cost, 0);
   return h(
     "div",
     { class: "overview" },
-    h(
-      "div",
-      { class: "attention" },
-      TERMINAL_STATUSES.has(run.status) ? null : interviewCallout(ctx),
-      run.status === "WAITING_FOR_APPROVAL" && approvals.focus ? reviewCallout(ctx, approvals.focus) : null,
-    ),
     h(
       "div",
       { class: "columns" },
@@ -52,55 +46,6 @@ export function renderOverview(ctx) {
       profilePanel(events),
       decisionsPanel(events),
       panel("Audit findings", findingList(auditFindings(events)), { className: "span-2 is-mira" }),
-    ),
-  );
-}
-
-function interviewCallout(ctx) {
-  const slot = h("div");
-  ctx
-    .interviewStatus()
-    .then((data) => {
-      const question = data?.pending_question;
-      if (!question) return;
-      slot.append(
-        h(
-          "div",
-          { class: "callout tone-active" },
-          h(
-            "div",
-            { class: "callout-head" },
-            h("strong", null, `Waiting for your answer · question ${question.question_number}`),
-            h("code", { class: "mono muted" }, question.field),
-          ),
-          h("p", { class: "question" }, plainQuestion(question.question)),
-          h(
-            "div",
-            { class: "form-actions" },
-            h("a", { class: "btn btn-primary", href: `#/runs/${encodeURIComponent(ctx.runId)}/interview` }, "Answer it"),
-          ),
-        ),
-      );
-    })
-    .catch(() => {});
-  return slot;
-}
-
-function reviewCallout(ctx, request) {
-  return h(
-    "div",
-    { class: "callout tone-review" },
-    h(
-      "div",
-      { class: "callout-head" },
-      h("strong", null, "Waiting for your review"),
-      request.toolCall ? h("code", { class: "mono" }, request.toolCall.tool) : null,
-    ),
-    h("p", null, request.summary || request.reason || "A decision needs a human answer."),
-    h(
-      "div",
-      { class: "form-actions" },
-      h("a", { class: "btn btn-primary", href: `#/runs/${encodeURIComponent(ctx.runId)}/approvals` }, "Open the review"),
     ),
   );
 }
