@@ -255,6 +255,7 @@ _EXPECTED_OPERATIONS: dict[tuple[str, str], tuple[int, str | None]] = {
     ("PUT", "/settings/{namespace}"): (200, "SettingsSnapshot"),
     ("GET", "/tools"): (200, "ToolListResponse"),
     ("GET", "/tools/{name}"): (200, "ToolDescriptor"),
+    ("GET", "/project"): (200, "ProjectSummaryResponse"),
     ("GET", "/project/context"): (200, "ProjectContextResponse"),
     ("PUT", "/project/context"): (200, "ProjectContextResponse"),
     ("GET", "/project/datasets"): (200, "ProjectDatasetListResponse"),

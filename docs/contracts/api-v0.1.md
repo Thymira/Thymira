@@ -312,6 +312,24 @@ Run that already registered a dataset keeps its own content-addressed copy. Read
 permission and changes need `WRITE`. Every route answers `503 project_not_configured` when the API
 has no project workspace.
 
+### `GET /project`
+
+Describes the project the API serves, read from `.thymira/config.yaml`, so a client's shell can
+name it without reading the file:
+
+```json
+{
+  "project_id": "project_0123456789abcdef0123456789abcdef",
+  "name": "credit-risk",
+  "domain": "credit_risk",
+  "frameworks": ["EU_AI_ACT", "CREDIT_RISK"],
+  "audit_required": true,
+  "datasets": ["german_credit"]
+}
+```
+
+`409 project_config_invalid` when the file is missing or does not validate.
+
 ### `GET /project/context` and `PUT /project/context`
 
 `GET` returns the context document as a redacted projection, with the sha256 of the stored bytes:

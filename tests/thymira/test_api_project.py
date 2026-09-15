@@ -15,6 +15,7 @@ from thymira.api import (
     ProjectContextResponse,
     ProjectDatasetListResponse,
     ProjectDatasetUploadResponse,
+    ProjectSummaryResponse,
     build_default_deps,
     create_app,
 )
@@ -190,6 +191,29 @@ def test_project_routes_need_a_configured_project(tmp_path: Path) -> None:
     client = _client(tmp_path, configured=False)
 
     response = client.get("/project/datasets")
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "project_not_configured"
+
+
+def test_the_project_summary_names_the_workspace(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+
+    response = client.get("/project")
+
+    assert response.status_code == 200
+    body = ProjectSummaryResponse.model_validate(response.json())
+    assert body.name == "credit-risk"
+    assert body.domain == "credit_risk"
+    assert body.datasets == ("german_credit",)
+    assert body.audit_required is True
+    assert body.frameworks == ()
+
+
+def test_the_project_summary_refuses_an_unconfigured_api(tmp_path: Path) -> None:
+    client = _client(tmp_path, configured=False)
+
+    response = client.get("/project")
 
     assert response.status_code == 503
     assert response.json()["code"] == "project_not_configured"

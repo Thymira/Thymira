@@ -50,6 +50,7 @@ from thymira.api.schemas import (
     ProjectDatasetTargetUpdate,
     ProjectDatasetUploadResponse,
     ProjectDatasetView,
+    ProjectSummaryResponse,
     ResumeRunRequest,
     RiskInterviewResponse,
     RunAuditResponse,

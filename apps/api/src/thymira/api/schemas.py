@@ -436,6 +436,19 @@ class ApprovalResolution(BaseModel):
     decision: PolicyDecision
 
 
+class ProjectSummaryResponse(BaseModel):
+    """What ``config.yaml`` declares about the project the API serves, for a client's shell."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    project_id: Id
+    name: str
+    domain: str
+    frameworks: tuple[str, ...] = ()
+    audit_required: bool = True
+    datasets: tuple[str, ...] = ()
+
+
 class ProjectContextResponse(BaseModel):
     """The project's context document as a redacted projection, with the digest of its source.
 

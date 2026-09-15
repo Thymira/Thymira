@@ -28,6 +28,7 @@ from thymira.api.schemas import (
     ProjectDatasetTargetUpdate,
     ProjectDatasetUploadResponse,
     ProjectDatasetView,
+    ProjectSummaryResponse,
 )
 from thymira.core import (
     ProjectInputConflictError,
@@ -90,6 +91,29 @@ def _dataset_view(dataset: DeclaredDataset) -> ProjectDatasetView:
         present=dataset.present,
         size_bytes=dataset.size_bytes,
         modified_at=dataset.modified_at,
+    )
+
+
+@router.get(
+    "",
+    response_model=ProjectSummaryResponse,
+    dependencies=[_REQUIRE_READ],
+    responses=_VALIDATION_ERROR_RESPONSE,
+)
+def get_project(deps: RuntimeDeps = _DEPS) -> ProjectSummaryResponse:
+    """Describe the configured project: its name, domain, governance and declared datasets."""
+    project_id, inputs = _inputs(deps)
+    try:
+        config = inputs.config()
+    except ProjectInputError as exc:
+        raise problem(409, "project_config_invalid", str(exc)) from exc
+    return ProjectSummaryResponse(
+        project_id=project_id,
+        name=config.project.name,
+        domain=config.project.domain,
+        frameworks=tuple(framework.value for framework in config.governance.frameworks),
+        audit_required=config.governance.audit_required,
+        datasets=tuple(dataset.name for dataset in config.datasets),
     )
 
 

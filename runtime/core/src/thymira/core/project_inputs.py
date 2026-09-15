@@ -272,6 +272,15 @@ class ProjectInputs:
         _, _, config = self._load_config()
         return tuple(self._describe(dataset) for dataset in config.datasets)
 
+    def config(self) -> ProjectConfig:
+        """Return the validated ``config.yaml``.
+
+        Raises:
+            ProjectInputError: The file is missing, is not YAML, or does not validate.
+        """
+        _, _, config = self._load_config()
+        return config
+
     def begin_upload(self, name: str, filename: str) -> DatasetUpload:
         """Start streaming a CSV or Parquet file that will be declared under ``name``.
 
