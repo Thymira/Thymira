@@ -5,7 +5,7 @@
 import { api, uploadDataset } from "../api.js";
 import { h, replace } from "../dom.js";
 import { bytes, relative, shortHash } from "../format.js";
-import { button, empty, errorNotice, loading, notice, panel, tag } from "../ui.js";
+import { button, confirmDialog, empty, errorNotice, loading, notice, panel, tag } from "../ui.js";
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
 const EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
@@ -80,7 +80,13 @@ function datasetRow(holder, options, dataset) {
   const remove = button("Remove", {
     kind: ["small", "danger"],
     onClick: async () => {
-      if (!window.confirm(`Stop declaring ${dataset.name}? Its file stays in ${dataset.path}.`)) return;
+      const confirmed = await confirmDialog({
+        title: `Stop declaring ${dataset.name}?`,
+        body: `Runs started from now on will not register it as a source. Its file stays in ${dataset.path}.`,
+        confirmLabel: "Stop declaring it",
+        danger: true,
+      });
+      if (!confirmed) return;
       try {
         await api.removeDataset(dataset.name);
         await loadDatasets(holder, options, {
@@ -153,7 +159,14 @@ function addForm(holder, options, items) {
           status.textContent = "A dataset name uses lowercase letters, digits, '_' and '-'.";
           return;
         }
-        if (items.some((item) => item.name === datasetName) && !window.confirm(`Replace the file of ${datasetName}?`)) return;
+        if (items.some((item) => item.name === datasetName)) {
+          const confirmed = await confirmDialog({
+            title: `Replace the file of ${datasetName}?`,
+            body: "Runs already started keep the copy they registered; runs started from now on read the new file.",
+            confirmLabel: "Replace the file",
+          });
+          if (!confirmed) return;
+        }
         await upload(holder, options, { name: datasetName, file: chosen, target: target.value.trim() || null, status, progress, submit });
       },
     },
@@ -218,7 +231,7 @@ function contextEditor(doc) {
   let digest = doc.sha256;
   const area = h(
     "textarea",
-    { class: "input context-editor", rows: 14, spellcheck: "false", readonly: doc.redacted, "aria-label": "Project context document" },
+    { class: "textarea context-editor", rows: 14, spellcheck: "false", readonly: doc.redacted, "aria-label": "Project context document" },
     saved,
   );
   const state = h("span", { class: "muted small" });
