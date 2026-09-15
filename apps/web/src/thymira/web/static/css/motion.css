@@ -1,0 +1,311 @@
+/* Thymira Console · motion. Short and purposeful: 120 ms for a press or a hover, 180 ms for
+   something arriving, 260 ms for a panel changing width. Every duration is a token, so the
+   prefers-reduced-motion block at the bottom can zero all of them at once — no animation
+   survives it, and nothing depends on an animation to become visible. */
+
+/* ---------------------------------------------------------------- keyframes */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fade-out {
+  to {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 var(--tone-soft);
+  }
+
+  50% {
+    box-shadow: 0 0 0 4px transparent;
+  }
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 150% 0;
+  }
+
+  to {
+    background-position: -50% 0;
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes pop {
+  0% {
+    transform: scale(0.7);
+  }
+
+  60% {
+    transform: scale(1.12);
+  }
+
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes dots {
+  0%,
+  70%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.45;
+  }
+
+  35% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
+}
+
+@keyframes slide-in-right {
+  from {
+    transform: translateX(16px);
+    opacity: 0;
+  }
+
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes slide-in-left {
+  from {
+    transform: translateX(-16px);
+    opacity: 0;
+  }
+
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes slide-down {
+  from {
+    transform: translate(-50%, -12px);
+    opacity: 0;
+  }
+
+  to {
+    transform: translate(-50%, 0);
+    opacity: 1;
+  }
+}
+
+/* ---------------------------------------------------------------- shell */
+.shell {
+  transition: grid-template-columns var(--d-3) var(--ease-move);
+}
+
+.sidebar,
+.inspector {
+  transition:
+    transform var(--d-3) var(--ease-move),
+    width var(--d-3) var(--ease-move);
+}
+
+.scrim {
+  animation: fade var(--d-2) var(--ease-enter);
+}
+
+.banner {
+  animation: slide-down var(--d-3) var(--ease-enter);
+}
+
+.view[data-enter] {
+  animation: rise var(--d-2) var(--ease-enter);
+}
+
+/* ---------------------------------------------------------------- controls */
+.btn,
+.chip,
+.pill,
+.inspector-tab,
+.palette-item,
+.thread-item,
+.tool-row,
+.file,
+.copy,
+.composer-send,
+.scroll-pill,
+.home-recent a {
+  transition:
+    background-color var(--d-1) var(--ease-move),
+    border-color var(--d-1) var(--ease-move),
+    color var(--d-1) var(--ease-move),
+    box-shadow var(--d-1) var(--ease-move),
+    transform var(--d-1) var(--ease-move);
+}
+
+.btn:active:not(:disabled),
+.composer-send:active:not(:disabled),
+.chip:active {
+  transform: scale(0.98);
+}
+
+.input,
+.textarea,
+.composer {
+  transition:
+    border-color var(--d-1) var(--ease-move),
+    box-shadow var(--d-1) var(--ease-move);
+}
+
+.btn-icon[data-busy="true"] svg,
+.loading::before {
+  animation: spin var(--d-spin) linear infinite;
+}
+
+details > summary:not(.no-marker)::before,
+.agent-group > summary .chevron {
+  transition: transform var(--d-2) var(--ease-move);
+}
+
+/* ---------------------------------------------------------------- live state */
+.thread-dot[data-live],
+.project-dot[data-state="online"] {
+  animation: breathe var(--d-pulse) var(--ease-move) infinite;
+}
+
+.step.is-current .step-dot {
+  --tone: var(--thy);
+
+  animation: pulse var(--d-pulse) var(--ease-move) infinite;
+}
+
+.inspector-badge[data-attention="true"],
+.thread-attention {
+  animation: pop var(--d-2) var(--ease-enter);
+}
+
+.skeleton-line {
+  animation: shimmer var(--d-shimmer) linear infinite;
+}
+
+.composer[data-state="working"] .composer-field {
+  animation: breathe var(--d-pulse) var(--ease-move) infinite;
+}
+
+.working-row .dots i {
+  animation: dots var(--d-dots) var(--ease-move) infinite;
+}
+
+.working-row .dots i:nth-child(2) {
+  animation-delay: 150ms;
+}
+
+.working-row .dots i:nth-child(3) {
+  animation-delay: 300ms;
+}
+
+/* ---------------------------------------------------------------- transcript */
+.turn[data-enter],
+.stage-divider[data-enter],
+.agent-group[data-enter],
+.audit-group[data-enter],
+.outcome-card[data-enter] {
+  animation: rise var(--d-2) var(--ease-enter) both;
+  animation-delay: calc(var(--i) * 30ms);
+}
+
+.scroll-pill {
+  animation: rise var(--d-2) var(--ease-enter);
+}
+
+/* ---------------------------------------------------------------- overlays */
+.toast {
+  animation: rise var(--d-2) var(--ease-enter);
+}
+
+.toast[data-leaving] {
+  animation: fade-out var(--d-2) var(--ease-move) forwards;
+}
+
+.palette-host {
+  animation: fade var(--d-1) var(--ease-enter);
+}
+
+.palette {
+  animation: rise var(--d-2) var(--ease-enter);
+}
+
+.dialog[open] {
+  animation: rise var(--d-2) var(--ease-enter);
+}
+
+.dialog[open]::backdrop {
+  animation: fade var(--d-2) var(--ease-enter);
+}
+
+/* ---------------------------------------------------------------- reduced motion
+   Every duration above is a token; zeroing the tokens stops every transition, every
+   animation and every pulse. Content still appears — no element depends on an animation
+   to reach its visible state. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --d-1: 0ms;
+    --d-2: 0ms;
+    --d-3: 0ms;
+    --d-pulse: 0ms;
+    --d-shimmer: 0ms;
+    --d-spin: 0ms;
+    --d-dots: 0ms;
+  }
+
+  .btn:active:not(:disabled),
+  .composer-send:active:not(:disabled),
+  .chip:active {
+    transform: none;
+  }
+
+  .turn[data-enter],
+  .stage-divider[data-enter],
+  .agent-group[data-enter],
+  .audit-group[data-enter],
+  .outcome-card[data-enter] {
+    animation-delay: 0ms;
+  }
+}

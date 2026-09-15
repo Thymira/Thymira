@@ -1,0 +1,369 @@
+/* Thymira Console · base layer: reset, element defaults, focus, tones and text utilities.
+   Nothing here knows about a specific view; everything reads from tokens.css. No browser
+   default look survives this file: selects, checkboxes, progress bars, scrollbars and
+   disclosure markers are all drawn from tokens. */
+
+/* ---------------------------------------------------------------- reset */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: var(--text-ui) / 1.5 var(--sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+
+h1 {
+  font-size: 24px;
+}
+
+h2 {
+  font-size: 16px;
+}
+
+h3 {
+  font-size: 14px;
+}
+
+p,
+figure,
+blockquote {
+  margin: 0;
+}
+
+ul,
+ol {
+  margin: 0;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--thy);
+}
+
+img,
+svg {
+  max-width: 100%;
+}
+
+svg {
+  display: block;
+  flex: none;
+}
+
+hr {
+  height: 1px;
+  margin: 0;
+  border: 0;
+  background: var(--border);
+}
+
+code,
+pre,
+kbd,
+samp,
+.mono {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  font-variant-ligatures: none;
+}
+
+pre {
+  margin: 0;
+}
+
+table {
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+/* ---------------------------------------------------------------- form elements */
+button,
+input,
+select,
+textarea {
+  margin: 0;
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+select {
+  appearance: none;
+  padding-right: 26px;
+  background-image:
+    linear-gradient(45deg, transparent 50%, currentcolor 50%),
+    linear-gradient(135deg, currentcolor 50%, transparent 50%);
+  background-position:
+    right 13px top 50%,
+    right 9px top 50%;
+  background-size: 4px 4px;
+  background-repeat: no-repeat;
+  cursor: pointer;
+}
+
+select option {
+  background: var(--surface);
+  color: var(--text);
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--thy);
+  cursor: pointer;
+}
+
+input[type="search"] {
+  appearance: none;
+}
+
+input[type="search"]::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+input[type="file"] {
+  max-width: 100%;
+  font-size: var(--text-small);
+  color: var(--text-2);
+}
+
+input[type="file"]::file-selector-button {
+  margin-right: var(--s-2);
+  padding: 4px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-1);
+  background: var(--surface-2);
+  color: var(--text);
+  font: 600 var(--text-small) / 1.4 var(--sans);
+  cursor: pointer;
+}
+
+progress {
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 6px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--surface-3);
+  color: var(--thy);
+  overflow: hidden;
+}
+
+progress::-webkit-progress-bar {
+  background: var(--surface-3);
+  border-radius: var(--r-pill);
+}
+
+progress::-webkit-progress-value {
+  background: var(--thy);
+  border-radius: var(--r-pill);
+}
+
+progress::-moz-progress-bar {
+  background: var(--thy);
+  border-radius: var(--r-pill);
+}
+
+/* ---------------------------------------------------------------- disclosure */
+details > summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+details > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* The generic chevron: a rotated corner. Views that draw their own marker opt out with
+   .no-marker on the summary. */
+details > summary:not(.no-marker)::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: var(--s-2);
+  border-right: 1.5px solid currentcolor;
+  border-bottom: 1.5px solid currentcolor;
+  transform: translateY(-1px) rotate(-45deg);
+  transform-origin: 50% 50%;
+  opacity: 0.75;
+}
+
+details[open] > summary:not(.no-marker)::before {
+  transform: translateY(-2px) rotate(45deg);
+}
+
+/* ---------------------------------------------------------------- focus and selection */
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--thy);
+  outline-offset: 2px;
+  border-radius: var(--r-1);
+}
+
+::selection {
+  background: var(--selection-bg);
+  color: var(--selection-ink);
+}
+
+/* ---------------------------------------------------------------- scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: var(--r-pill);
+  background: var(--border-strong);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-3);
+  background-clip: content-box;
+}
+
+/* ---------------------------------------------------------------- tones
+   A tone sets --tone; components paint borders, dots and labels from it. Colour is never the
+   only signal: an icon, a label or a shape always accompanies it. */
+.tone-neutral {
+  --tone: var(--text-3);
+}
+
+.tone-active {
+  --tone: var(--active);
+}
+
+.tone-review {
+  --tone: var(--review);
+}
+
+.tone-ok {
+  --tone: var(--ok);
+}
+
+.tone-caution {
+  --tone: var(--caution);
+}
+
+.tone-warn {
+  --tone: var(--warn);
+}
+
+.tone-block {
+  --tone: var(--block);
+}
+
+.tone-thy {
+  --tone: var(--thy);
+}
+
+.tone-mira {
+  --tone: var(--mira);
+}
+
+/* ---------------------------------------------------------------- text utilities */
+.muted {
+  color: var(--text-3);
+}
+
+.small {
+  font-size: var(--text-small);
+}
+
+.mono {
+  font-variant-numeric: tabular-nums;
+}
+
+.eyebrow {
+  font: 600 var(--text-micro) / 1.4 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-3);
+}
+
+.kbd {
+  display: inline-block;
+  min-width: 20px;
+  padding: 1px 5px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: var(--r-1);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font: 600 11px / 1.5 var(--mono);
+  text-align: center;
+  white-space: nowrap;
+}
+
+.divider {
+  height: 1px;
+  margin: var(--s-2) 0;
+  background: var(--border);
+}
+
+.nowrap {
+  white-space: nowrap;
+}
+
+.num,
+.tabular {
+  font-variant-numeric: tabular-nums;
+}

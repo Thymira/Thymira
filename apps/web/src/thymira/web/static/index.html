@@ -1,31 +1,31 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="system">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <title>Thymira Console</title>
+  <title>Thymira</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/console.css">
+  <link rel="stylesheet" href="/static/css/tokens.css">
+  <link rel="stylesheet" href="/static/css/base.css">
+  <link rel="stylesheet" href="/static/css/layout.css">
+  <link rel="stylesheet" href="/static/css/components.css">
+  <link rel="stylesheet" href="/static/css/thread.css">
+  <link rel="stylesheet" href="/static/css/panels.css">
+  <link rel="stylesheet" href="/static/css/motion.css">
   <script type="module" src="/static/js/main.js"></script>
 </head>
 <body>
-  <header class="bar">
-    <a class="wordmark" href="#/">
-      <span class="wordmark-glyph" aria-hidden="true"><i></i><i></i></span>
-      <span class="wordmark-name"><span class="wordmark-thy">THY</span><span class="wordmark-mira">MIRA</span></span>
-      <span class="wordmark-sub">console</span>
-    </a>
-    <span class="bar-spacer"></span>
-    <a class="bar-button" href="#/settings">Settings</a>
-    <span class="api-state" id="api-state" data-state="unknown">API</span>
-    <button class="bar-button" id="lock" type="button">Connect</button>
-  </header>
-  <div class="shell">
-    <aside class="rail" id="rail" aria-label="Runs"></aside>
+  <div class="shell" id="shell" data-sidebar="open" data-inspector="closed">
+    <nav class="sidebar" id="sidebar" aria-label="Threads"></nav>
+    <div class="scrim" id="scrim" hidden></div>
     <main class="main" id="main"></main>
+    <aside class="inspector" id="inspector" aria-label="Inspector" hidden></aside>
   </div>
-  <dialog class="connect" id="connect" aria-labelledby="connect-title">
+  <div class="banner" id="banner" hidden role="status"></div>
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+  <div class="palette-host" id="palette" hidden></div>
+  <dialog class="dialog connect" id="connect" aria-labelledby="connect-title">
     <form id="connect-form">
       <h2 id="connect-title">Connect to the Thymira API</h2>
       <p>Requests go to the API with the token you paste here. It is kept in this browser tab only and
@@ -41,5 +41,6 @@
       </div>
     </form>
   </dialog>
+  <dialog class="dialog" id="confirm" aria-labelledby="confirm-title"></dialog>
 </body>
 </html>

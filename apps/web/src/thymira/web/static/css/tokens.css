@@ -1,0 +1,187 @@
+/* Thymira Console · design tokens.
+
+   Warm neutrals with two brand accents: THY orange (the intelligence that acts) and MIRA teal
+   (the intelligence that watches). Light is the base palette on :root; the dark palette is
+   written twice — once for the explicit choice (:root[data-theme="dark"]) and once for the
+   system preference (:root:not([data-theme="light"]) inside the dark media query) — so the
+   toggle wins in both directions. Every colour exists in both themes; none is defined only
+   once. Nothing here is fetched from another origin. */
+
+:root {
+  color-scheme: light;
+
+  /* ---------------------------------------------------------------- surfaces (light) */
+  --bg: #f6f5f2;
+  --surface: #ffffff;
+  --surface-2: #f0eeea;
+  --surface-3: #e7e4de;
+  --border: #e4e1da;
+  --border-strong: #cdc8be;
+
+  /* ---------------------------------------------------------------- text (light) */
+  --text: #1b1a17;
+  --text-2: #5b5850;
+  --text-3: #8b877c;
+
+  /* ---------------------------------------------------------------- accents (light) */
+  --thy: #d9531e;
+  --mira: #0f8b8d;
+
+  /* ---------------------------------------------------------------- state (light) */
+  --ok: #1f8a4c;
+  --caution: #4f9d5f;
+  --warn: #b3701a;
+  --review: #2f6fde;
+  --active: #0e8a94;
+  --block: #cf3527;
+
+  /* ---------------------------------------------------------------- ink on filled accents */
+  --on-accent: #ffffff;
+
+  /* ---------------------------------------------------------------- depth (light) */
+  --scrim: rgb(24 22 19 / 0.42);
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.05);
+  --shadow-2: 0 4px 16px rgb(0 0 0 / 0.08);
+  --shadow-3: 0 12px 32px rgb(0 0 0 / 0.12);
+  --selection-bg: #f9d7c6;
+  --selection-ink: #1b1a17;
+  --skeleton-1: #eae7e1;
+  --skeleton-2: #f7f5f2;
+
+  /* ---------------------------------------------------------------- derived tints
+     These reference the palette above, so they follow whichever theme is active. */
+  --thy-soft: color-mix(in srgb, var(--thy) 12%, transparent);
+  --thy-line: color-mix(in srgb, var(--thy) 34%, transparent);
+  --mira-soft: color-mix(in srgb, var(--mira) 12%, transparent);
+  --mira-line: color-mix(in srgb, var(--mira) 34%, transparent);
+  --tone: var(--text-3);
+  --tone-soft: color-mix(in srgb, var(--tone) 14%, transparent);
+  --ring: color-mix(in srgb, var(--thy) 24%, transparent);
+  --hover: color-mix(in srgb, var(--text) 5%, transparent);
+  --press: color-mix(in srgb, var(--text) 9%, transparent);
+  --code-bg: var(--surface-2);
+
+  /* ---------------------------------------------------------------- type */
+  --sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "Cascadia Code", "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  --text-ui: 14px;
+  --text-prose: 15px;
+  --text-small: 12.5px;
+  --text-micro: 11px;
+
+  /* ---------------------------------------------------------------- space */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+
+  /* ---------------------------------------------------------------- radii */
+  --r-1: 6px;
+  --r-2: 10px;
+  --r-3: 14px;
+  --r-pill: 999px;
+
+  /* ---------------------------------------------------------------- shell metrics
+     --sidebar-width and --inspector-width are overwritten on #shell from the saved prefs. */
+  --sidebar-width: 280px;
+  --sidebar-rail: 56px;
+  --inspector-width: 420px;
+
+  /* The grid columns read these, never the two widths above: the widths arrive as inline
+     custom properties on #shell and an inline value would beat an attribute rule. */
+  --col-1: var(--sidebar-width);
+  --col-3: var(--inspector-width);
+
+  --column: 840px;
+  --head-height: 52px;
+
+  /* ---------------------------------------------------------------- motion (see motion.css) */
+  --d-1: 120ms;
+  --d-2: 180ms;
+  --d-3: 260ms;
+  --d-pulse: 1800ms;
+  --d-shimmer: 1400ms;
+  --d-spin: 800ms;
+  --d-dots: 1200ms;
+  --ease-enter: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-move: cubic-bezier(0.4, 0, 0.2, 1);
+  --i: 0;
+}
+
+/* ---------------------------------------------------------------- dark: explicit choice */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #141311;
+  --surface: #1b1a17;
+  --surface-2: #23221e;
+  --surface-3: #2b2a25;
+  --border: #2e2c27;
+  --border-strong: #403d36;
+
+  --text: #eceae4;
+  --text-2: #b1ada3;
+  --text-3: #7d7970;
+
+  --thy: #ff7a45;
+  --mira: #4cc9cc;
+
+  --ok: #4fcf7a;
+  --caution: #8fd6a0;
+  --warn: #e3a23b;
+  --review: #7aa9ff;
+  --active: #3cc4cf;
+  --block: #ff6d61;
+
+  --on-accent: #17140f;
+
+  --scrim: rgb(0 0 0 / 0.6);
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-2: 0 6px 20px rgb(0 0 0 / 0.45);
+  --shadow-3: 0 18px 48px rgb(0 0 0 / 0.6);
+  --selection-bg: #5a2c14;
+  --selection-ink: #f7ece6;
+  --skeleton-1: #262520;
+  --skeleton-2: #33312b;
+}
+
+/* ---------------------------------------------------------------- dark: system preference */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    --bg: #141311;
+    --surface: #1b1a17;
+    --surface-2: #23221e;
+    --surface-3: #2b2a25;
+    --border: #2e2c27;
+    --border-strong: #403d36;
+
+    --text: #eceae4;
+    --text-2: #b1ada3;
+    --text-3: #7d7970;
+
+    --thy: #ff7a45;
+    --mira: #4cc9cc;
+
+    --ok: #4fcf7a;
+    --caution: #8fd6a0;
+    --warn: #e3a23b;
+    --review: #7aa9ff;
+    --active: #3cc4cf;
+    --block: #ff6d61;
+
+    --on-accent: #17140f;
+
+    --scrim: rgb(0 0 0 / 0.6);
+    --shadow-1: 0 1px 2px rgb(0 0 0 / 0.4);
+    --shadow-2: 0 6px 20px rgb(0 0 0 / 0.45);
+    --shadow-3: 0 18px 48px rgb(0 0 0 / 0.6);
+    --selection-bg: #5a2c14;
+    --selection-ink: #f7ece6;
+    --skeleton-1: #262520;
+    --skeleton-2: #33312b;
+  }
+}

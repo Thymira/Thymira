@@ -1,0 +1,757 @@
+/* Thymira Console · the shell: the three-column grid, the sidebar of threads, the inspector,
+   and the floating surfaces that sit above them (scrim, banner, toasts, command palette).
+
+   The grid columns read indirection tokens (--col-1/--col-3) rather than --sidebar-width and
+   --inspector-width directly, because those two are written as inline custom properties on
+   #shell from the saved prefs and an inline value would beat an attribute rule. */
+
+/* ---------------------------------------------------------------- grid */
+.shell {
+  height: 100%;
+  display: grid;
+  grid-template-columns: var(--col-1) minmax(0, 1fr) var(--col-3);
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.shell[data-sidebar="collapsed"] {
+  --col-1: var(--sidebar-rail);
+}
+
+.shell[data-inspector="closed"] {
+  --col-3: 0px;
+}
+
+/* ---------------------------------------------------------------- sidebar */
+.sidebar {
+  position: relative;
+  z-index: 3;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.sidebar-brand {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  height: var(--head-height);
+  padding: 0 var(--s-3) 0 var(--s-4);
+}
+
+.wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-width: 0;
+  margin-right: auto;
+}
+
+.wordmark-glyph {
+  display: inline-grid;
+  grid-template-columns: 5px 5px;
+  gap: 3px;
+  height: 16px;
+  flex: none;
+}
+
+.wordmark-glyph i {
+  display: block;
+  border-radius: 1px;
+  background: var(--mira);
+}
+
+.wordmark-glyph i:first-child {
+  background: var(--thy);
+}
+
+.wordmark-name {
+  font: 700 12px / 1 var(--mono);
+  letter-spacing: 0.2em;
+  white-space: nowrap;
+}
+
+.sidebar-collapse {
+  flex: none;
+  color: var(--text-3);
+}
+
+.sidebar-collapse:hover {
+  color: var(--text);
+}
+
+/* Project block ---------------------------------------------------------- */
+.project-card {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr);
+  align-items: center;
+  column-gap: var(--s-2);
+  row-gap: 3px;
+  margin: 0 var(--s-3) var(--s-3);
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  background: var(--surface);
+  color: inherit;
+}
+
+.project-card:hover {
+  border-color: var(--border-strong);
+  color: inherit;
+}
+
+.project-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+
+.project-dot[data-state="online"] {
+  background: var(--ok);
+}
+
+.project-dot[data-state="offline"] {
+  background: var(--block);
+}
+
+.project-dot[data-state="unknown"] {
+  background: var(--text-3);
+}
+
+.project-name {
+  min-width: 0;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.project-meta {
+  grid-column: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  flex-wrap: wrap;
+  font-size: var(--text-micro);
+  color: var(--text-3);
+}
+
+/* New thread, search, filters ------------------------------------------- */
+.sidebar-new {
+  margin: 0 var(--s-3) var(--s-2);
+}
+
+.sidebar-search {
+  margin: 0 var(--s-3) var(--s-2);
+}
+
+.filter-pills {
+  display: flex;
+  gap: var(--s-1);
+  padding: 0 var(--s-3) var(--s-2);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.filter-pills::-webkit-scrollbar {
+  display: none;
+}
+
+.pill {
+  flex: none;
+  padding: 3px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--text-3);
+  font-size: var(--text-small);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.pill:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.pill[aria-pressed="true"] {
+  border-color: var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-1);
+}
+
+/* Thread list ------------------------------------------------------------ */
+.thread-groups {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: var(--s-4);
+  overscroll-behavior: contain;
+}
+
+.thread-group + .thread-group {
+  margin-top: var(--s-2);
+}
+
+.thread-group-title {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: var(--s-2) var(--s-4) var(--s-1);
+  background: linear-gradient(var(--surface-2) 70%, transparent);
+  font: 600 10.5px / 1.4 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-3);
+}
+
+.thread-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 var(--s-2);
+  display: grid;
+  gap: 2px;
+}
+
+.thread-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr);
+  align-items: start;
+  column-gap: var(--s-2);
+  row-gap: 3px;
+  padding: var(--s-2) var(--s-2) var(--s-2) 10px;
+  border-radius: var(--r-2);
+  color: inherit;
+}
+
+.thread-item:hover {
+  background: var(--surface-3);
+  color: inherit;
+}
+
+.thread-item[aria-current="page"] {
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+  color: inherit;
+}
+
+.thread-item[aria-current="page"]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: var(--r-pill);
+  background: var(--thy);
+}
+
+.thread-dot {
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--tone);
+}
+
+.thread-title {
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.35;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.thread-meta {
+  grid-column: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-width: 0;
+  font-size: var(--text-micro);
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.thread-attention {
+  grid-column: 2;
+  justify-self: start;
+  padding: 1px 7px;
+  border-radius: var(--r-pill);
+  background: var(--thy-soft);
+  color: var(--thy);
+  font: 600 10.5px / 1.6 var(--mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.sidebar-message {
+  padding: var(--s-3) var(--s-4);
+  color: var(--text-3);
+  font-size: var(--text-small);
+}
+
+.sidebar-message:empty {
+  display: none;
+}
+
+/* Footer ----------------------------------------------------------------- */
+.sidebar-footer {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  padding: var(--s-2) var(--s-3);
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.sidebar-footer .btn-icon {
+  color: var(--text-3);
+}
+
+.sidebar-footer .btn-icon:hover {
+  color: var(--text);
+}
+
+.sidebar-footer .spacer {
+  flex: 1;
+}
+
+/* Collapsed rail --------------------------------------------------------- */
+.icon-rail {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) 0;
+}
+
+.shell[data-sidebar="collapsed"] .sidebar > :not(.icon-rail) {
+  display: none;
+}
+
+.shell[data-sidebar="collapsed"] .icon-rail {
+  display: flex;
+}
+
+.menu-button {
+  display: none;
+}
+
+/* ---------------------------------------------------------------- main */
+.main {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* A view that is a simple scrolling document (home, project, settings). */
+.view.is-document {
+  overflow-y: auto;
+}
+
+/* ---------------------------------------------------------------- inspector */
+.inspector {
+  position: relative;
+  z-index: 2;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.inspector-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  height: var(--head-height);
+  padding: 0 var(--s-2) 0 var(--s-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.inspector-head h2 {
+  margin-right: auto;
+  font: 600 var(--text-micro) / 1.4 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--text-3);
+}
+
+.inspector-close {
+  color: var(--text-3);
+}
+
+.inspector-close:hover {
+  color: var(--text);
+}
+
+.inspector-tabs {
+  flex: none;
+  display: flex;
+  gap: 2px;
+  padding: var(--s-2) var(--s-2);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
+  background: var(--surface-2);
+}
+
+.inspector-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.inspector-tab {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--r-1);
+  color: var(--text-3);
+  font-size: var(--text-small);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.inspector-tab:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.inspector-tab[aria-current="page"] {
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-1);
+}
+
+.inspector-badge {
+  min-width: 17px;
+  padding: 0 5px;
+  border-radius: var(--r-pill);
+  background: var(--surface-3);
+  color: var(--text-3);
+  font: 600 10px / 17px var(--mono);
+  text-align: center;
+}
+
+.inspector-badge[data-attention="true"] {
+  background: var(--thy);
+  color: var(--on-accent);
+}
+
+.inspector-badge:empty {
+  display: none;
+}
+
+.inspector-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--s-4);
+}
+
+.inspector-stale {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  width: 100%;
+  margin-bottom: var(--s-3);
+  padding: 6px 10px;
+  border: 1px solid var(--thy-line);
+  border-radius: var(--r-1);
+  background: var(--thy-soft);
+  color: var(--thy);
+  font-size: var(--text-small);
+  font-weight: 600;
+}
+
+.inspector-resize {
+  position: absolute;
+  inset-block: 0;
+  left: -3px;
+  width: 7px;
+  z-index: 4;
+  cursor: col-resize;
+  background: transparent;
+  border: 0;
+  padding: 0;
+}
+
+.inspector-resize::after {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  left: 3px;
+  width: 1px;
+  background: transparent;
+}
+
+.inspector-resize:hover::after,
+.inspector-resize:focus-visible::after {
+  background: var(--thy);
+}
+
+/* ---------------------------------------------------------------- scrim */
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: var(--scrim);
+  backdrop-filter: blur(2px);
+}
+
+/* ---------------------------------------------------------------- offline banner */
+.banner {
+  position: fixed;
+  top: var(--s-3);
+  left: 50%;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  max-width: min(520px, calc(100vw - 32px));
+  padding: 7px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: var(--text-small);
+  box-shadow: var(--shadow-2);
+  transform: translateX(-50%);
+}
+
+.banner::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--block);
+}
+
+/* ---------------------------------------------------------------- toasts */
+.toasts {
+  position: fixed;
+  left: 50%;
+  bottom: var(--s-5);
+  z-index: 80;
+  display: grid;
+  gap: var(--s-2);
+  justify-items: center;
+  width: max-content;
+  max-width: min(520px, calc(100vw - 32px));
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  max-width: 100%;
+  padding: 9px 14px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--tone);
+  border-radius: var(--r-2);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--text-small);
+  box-shadow: var(--shadow-3);
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+/* ---------------------------------------------------------------- command palette */
+.palette-host {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 12vh var(--s-4) var(--s-4);
+  background: var(--scrim);
+  backdrop-filter: blur(3px);
+}
+
+.palette {
+  display: flex;
+  flex-direction: column;
+  width: min(640px, 100%);
+  max-height: 60vh;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-3);
+  background: var(--surface);
+  box-shadow: var(--shadow-3);
+}
+
+.palette-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: 0 var(--s-4);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-3);
+}
+
+.palette-input {
+  flex: 1;
+  min-width: 0;
+  padding: var(--s-4) 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 15px;
+}
+
+.palette-input::placeholder {
+  color: var(--text-3);
+}
+
+.palette-list {
+  flex: 1;
+  min-height: 0;
+  list-style: none;
+  margin: 0;
+  padding: var(--s-2);
+  overflow-y: auto;
+}
+
+.palette-group {
+  padding: var(--s-2) var(--s-2) var(--s-1);
+  font: 600 10.5px / 1.4 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-3);
+}
+
+.palette-item {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 8px 10px;
+  border-radius: var(--r-1);
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.palette-item mark {
+  background: none;
+  color: var(--thy);
+  font-weight: 600;
+}
+
+.palette-item[aria-selected="true"] {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.palette-item-label {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.palette-item-hint {
+  flex: none;
+  color: var(--text-3);
+  font-size: var(--text-micro);
+  white-space: nowrap;
+}
+
+/* The strip under the list: the palette's own key hints. */
+.palette-hint {
+  flex: none;
+  padding: var(--s-2) var(--s-4);
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-3);
+  font-size: var(--text-micro);
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------- responsive
+   ≥1280px is the three-column shell. Below that the inspector overlays as a right sheet;
+   below 900px the sidebar becomes a left drawer. */
+@media (max-width: 1279px) {
+  .shell {
+    --col-3: 0px;
+  }
+
+  .inspector {
+    position: fixed;
+    inset-block: 0;
+    right: 0;
+    z-index: 50;
+    width: min(var(--inspector-width), 92vw);
+    box-shadow: var(--shadow-3);
+  }
+}
+
+@media (max-width: 899px) {
+  .shell {
+    --col-1: 0px;
+  }
+
+  .sidebar {
+    position: fixed;
+    inset-block: 0;
+    left: 0;
+    z-index: 50;
+    width: min(var(--sidebar-width), 86vw);
+    transform: translateX(-100%);
+    box-shadow: var(--shadow-3);
+  }
+
+  .shell[data-sidebar="drawer-open"] .sidebar {
+    transform: translateX(0);
+  }
+
+  .shell[data-sidebar="collapsed"] .sidebar > :not(.icon-rail) {
+    display: revert;
+  }
+
+  .shell[data-sidebar="collapsed"] .icon-rail {
+    display: none;
+  }
+
+  .menu-button {
+    display: inline-flex;
+  }
+
+  .inspector {
+    width: 100vw;
+  }
+}

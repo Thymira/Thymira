@@ -1,0 +1,675 @@
+/* Thymira Console · evidence panels. Every rule the inspector's renderers (views/tabs/*.js) and
+   the project inputs form rely on, carried over from the old console.css and restyled with the
+   tokens. The renderers were not changed: the class names here are the ones they already emit.
+
+   The panels are written for the inspector's narrow column first (single column, capped lists)
+   and widen on a wide screen. */
+
+/* ---------------------------------------------------------------- panel */
+.panel {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 8px var(--s-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.panel-head h2 {
+  font: 600 10.5px / 1.4 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-2);
+}
+
+.panel-aside {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  text-align: right;
+  font-size: var(--text-small);
+}
+
+.panel-body {
+  display: grid;
+  gap: var(--s-3);
+  min-width: 0;
+  padding: var(--s-3);
+}
+
+.overview,
+.inputs {
+  display: grid;
+  gap: var(--s-4);
+  min-width: 0;
+}
+
+.columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--s-4);
+}
+
+.columns > .span-2 {
+  grid-column: auto;
+}
+
+@media (min-width: 1500px) {
+  .main .columns {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .main .columns > .span-2 {
+    grid-column: span 2;
+  }
+}
+
+/* ---------------------------------------------------------------- callouts, questions */
+.callout {
+  display: grid;
+  gap: var(--s-2);
+  padding: var(--s-3) var(--s-4);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--tone);
+  border-radius: var(--r-2);
+  background: var(--tone-soft);
+}
+
+.callout-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+}
+
+.question {
+  max-width: 90ch;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.prompt-text {
+  max-width: 100ch;
+  padding: 9px var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  background: var(--surface-2);
+  font-size: var(--text-small);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.plain-list {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: var(--s-1);
+}
+
+.checklist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--s-1);
+  color: var(--text-2);
+}
+
+.checklist li::before {
+  content: "— ";
+  color: var(--text-3);
+}
+
+/* ---------------------------------------------------------------- statistics */
+.summary-strip {
+  display: flex;
+  flex-wrap: wrap;
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.stat {
+  display: grid;
+  gap: 4px;
+  flex: 1 1 120px;
+  min-width: 118px;
+  padding: 10px var(--s-4);
+  border-right: 1px solid var(--border);
+}
+
+.stat:last-child {
+  border-right: 0;
+}
+
+.stat-label {
+  font: 600 10px / 1.4 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-3);
+}
+
+.stat-value {
+  font-size: 17px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat[class*="tone-"] .stat-value {
+  color: var(--tone);
+}
+
+.tally {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-1);
+}
+
+.tally-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  font: 11px / 1.5 var(--mono);
+}
+
+.tally-item strong {
+  color: var(--tone);
+  font-size: 13px;
+}
+
+/* ---------------------------------------------------------------- findings, decisions */
+.findings {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--s-3);
+}
+
+.finding {
+  display: grid;
+  gap: 6px;
+  padding-bottom: var(--s-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.finding:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.finding-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+}
+
+.decide {
+  display: grid;
+  gap: var(--s-2);
+  padding-top: var(--s-3);
+  border-top: 1px dashed var(--border-strong);
+}
+
+.control-legend > summary {
+  margin-bottom: var(--s-2);
+  color: var(--text-3);
+  font-size: var(--text-small);
+}
+
+.control-legend .kv {
+  grid-template-columns: minmax(84px, max-content) minmax(0, 1fr);
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.control-legend dt {
+  font: 12px var(--mono);
+}
+
+/* ---------------------------------------------------------------- toolbars */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+}
+
+.toolbar input[type="search"],
+.toolbar .input {
+  width: auto;
+  min-width: 140px;
+  flex: 1;
+}
+
+.toolbar select.input {
+  flex: none;
+}
+
+/* ---------------------------------------------------------------- events */
+.events td {
+  white-space: nowrap;
+}
+
+.events td.event-summary {
+  min-width: 240px;
+  white-space: normal;
+  color: var(--text-2);
+}
+
+.event-type {
+  font: 600 11.5px / 1.5 var(--mono);
+}
+
+.family-policy,
+.family-human {
+  color: var(--review);
+}
+
+.family-audit,
+.family-risk,
+.family-control_evaluation,
+.family-mira,
+.family-pack_binding,
+.family-risk_assessment {
+  color: var(--mira);
+}
+
+.family-tool {
+  color: var(--warn);
+}
+
+.family-agent,
+.family-subagent {
+  color: var(--ok);
+}
+
+.family-model,
+.family-artifact,
+.family-activity_profile,
+.family-context {
+  color: var(--text-2);
+}
+
+.family-run,
+.family-turn,
+.family-session {
+  color: var(--thy);
+}
+
+/* ---------------------------------------------------------------- code */
+.code {
+  margin: 0;
+  max-height: 420px;
+  overflow: auto;
+  padding: var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  background: var(--code-bg);
+  line-height: 1.55;
+  white-space: pre;
+}
+
+.prose-code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.csv {
+  max-height: 420px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+}
+
+.csv th {
+  background: var(--surface);
+  font: 600 11px / 1.4 var(--mono);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.csv td {
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
+/* ---------------------------------------------------------------- artifacts */
+.artifacts {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--s-4);
+  align-items: start;
+}
+
+.artifact-list {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.list-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+  padding: var(--s-2);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.list-tools .input {
+  flex: 1;
+  min-width: 110px;
+}
+
+.list-summary {
+  padding: 6px var(--s-3);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-small);
+  color: var(--text-2);
+}
+
+.file-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 32vh;
+  overflow-y: auto;
+}
+
+.file-list .empty {
+  padding: var(--s-3);
+}
+
+.file-group {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 5px var(--s-3);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-3);
+  font: 600 10px / 1.5 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.file {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  padding: 8px var(--s-3);
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-left: 3px solid transparent;
+  background: none;
+  text-align: left;
+  font-size: var(--text-small);
+}
+
+.file:hover {
+  background: var(--surface-2);
+}
+
+.file.is-selected {
+  background: var(--surface-2);
+  border-left-color: var(--thy);
+}
+
+.file.is-invalid .file-name {
+  color: var(--text-3);
+  text-decoration: line-through;
+}
+
+.file-name {
+  overflow-wrap: anywhere;
+  font-weight: 500;
+}
+
+.file-meta {
+  color: var(--text-3);
+  font-size: var(--text-micro);
+}
+
+.artifact-preview {
+  display: grid;
+  gap: var(--s-3);
+  min-width: 0;
+}
+
+.preview-image {
+  display: block;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  background: repeating-conic-gradient(var(--surface-2) 0 25%, var(--surface) 0 50%) 0 0 / 16px 16px;
+}
+
+/* On a wide main column (not the inspector) the artifacts view splits in two. */
+@media (min-width: 1100px) {
+  .main .artifacts {
+    grid-template-columns: minmax(240px, 340px) minmax(0, 1fr);
+  }
+
+  .main .file-list {
+    max-height: 62vh;
+  }
+}
+
+/* ---------------------------------------------------------------- usage bars */
+.bars {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.bar-row {
+  display: grid;
+  grid-template-columns: minmax(84px, 150px) minmax(0, 1fr) 76px;
+  align-items: center;
+  gap: var(--s-2);
+  font-size: var(--text-small);
+}
+
+.bar-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+}
+
+.bar-track {
+  height: 8px;
+  border-radius: var(--r-pill);
+  background: var(--surface-3);
+  overflow: hidden;
+}
+
+.bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--r-pill);
+  background: linear-gradient(90deg, var(--thy), color-mix(in srgb, var(--thy) 60%, var(--warn)));
+}
+
+.bar-value {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+}
+
+/* ---------------------------------------------------------------- project inputs */
+.dataset-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+}
+
+.dataset {
+  display: grid;
+  gap: var(--s-2);
+  padding: var(--s-3) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.dataset:first-child {
+  padding-top: 0;
+}
+
+.dataset:last-child {
+  border-bottom: 0;
+}
+
+.dataset-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+}
+
+.dataset-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.dataset-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.dataset-add {
+  display: grid;
+  gap: var(--s-2);
+  padding-top: var(--s-3);
+  border-top: 1px dashed var(--border-strong);
+}
+
+.dataset-add-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.dataset-add-row .input,
+.field-inline .input {
+  width: 160px;
+}
+
+.chosen-file {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-small);
+  color: var(--text-2);
+}
+
+.upload-progress {
+  width: 100%;
+  height: 6px;
+}
+
+.context-editor {
+  min-height: 300px;
+  max-width: none;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  tab-size: 2;
+}
+
+.context-editor[readonly] {
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+
+/* ---------------------------------------------------------------- project page */
+.project {
+  width: min(880px, calc(100% - var(--s-6)));
+  margin: 0 auto;
+  padding: var(--s-6) 0;
+  display: grid;
+  gap: var(--s-5);
+}
+
+.project-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+  padding-bottom: var(--s-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.project-head h1 {
+  margin-right: auto;
+  font-size: 22px;
+}
+
+.project-head .chips {
+  flex-basis: 100%;
+}
+
+/* ---------------------------------------------------------------- settings */
+.settings {
+  width: min(760px, calc(100% - var(--s-6)));
+  margin: 0 auto;
+  padding: var(--s-6) 0;
+  display: grid;
+  gap: var(--s-4);
+}
+
+.settings h1 {
+  font-size: 22px;
+}
+
+.settings-section {
+  display: grid;
+  gap: var(--s-3);
+  padding: var(--s-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  background: var(--surface);
+}
+
+.settings-section > h2 {
+  font: 600 10.5px / 1.4 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-3);
+}
+
+.settings-section .field .input {
+  font-family: var(--mono);
+}
+
+.lede {
+  max-width: 62ch;
+  color: var(--text-2);
+  font-size: 14px;
+}

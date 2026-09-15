@@ -1,0 +1,642 @@
+/* Thymira Console · components: the parts every view composes from — buttons, fields, chips,
+   tags, cards, tables, skeletons, notices, avatars and dialogs. Sizes are fixed (34px control
+   height, 6/10/14px radii) so a row of mixed controls always lines up. */
+
+/* ---------------------------------------------------------------- buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 13px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-2);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--text-small);
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.btn:hover {
+  border-color: var(--text-3);
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.btn:active {
+  background: var(--surface-3);
+}
+
+.btn:disabled,
+.btn[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  border-color: transparent;
+  background: var(--thy);
+  color: var(--on-accent);
+  box-shadow: var(--shadow-1);
+}
+
+.btn-primary:hover {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--thy) 88%, var(--text));
+  color: var(--on-accent);
+}
+
+.btn-primary:active {
+  background: color-mix(in srgb, var(--thy) 78%, var(--text));
+}
+
+.btn-ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-2);
+}
+
+.btn-ghost:hover {
+  border-color: transparent;
+  background: var(--hover);
+  color: var(--text);
+}
+
+.btn-ghost:active,
+.btn-icon:active {
+  background: var(--press);
+}
+
+.btn-danger {
+  border-color: color-mix(in srgb, var(--block) 45%, transparent);
+  background: transparent;
+  color: var(--block);
+}
+
+.btn-danger:hover {
+  border-color: transparent;
+  background: var(--block);
+  color: var(--on-accent);
+}
+
+.btn-approve {
+  border-color: transparent;
+  background: var(--ok);
+  color: var(--on-accent);
+}
+
+.btn-approve:hover {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--ok) 88%, var(--text));
+  color: var(--on-accent);
+}
+
+.btn-small {
+  min-height: 28px;
+  padding: 0 9px;
+  border-radius: var(--r-1);
+  font-size: var(--text-micro);
+}
+
+.btn-icon {
+  width: 32px;
+  min-height: 32px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-2);
+}
+
+.btn-icon:hover {
+  border-color: transparent;
+  background: var(--hover);
+  color: var(--text);
+}
+
+.btn-icon[aria-pressed="true"] {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.btn-icon.btn-small {
+  width: 26px;
+  min-height: 26px;
+}
+
+.btn-block {
+  width: 100%;
+}
+
+/* ---------------------------------------------------------------- fields */
+.input,
+.textarea {
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-2);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--text-small);
+}
+
+.input::placeholder,
+.textarea::placeholder {
+  color: var(--text-3);
+}
+
+.input:hover,
+.textarea:hover {
+  border-color: var(--text-3);
+}
+
+.input:focus,
+.textarea:focus {
+  outline: none;
+  border-color: var(--thy);
+  box-shadow: 0 0 0 3px var(--ring);
+}
+
+.input:disabled,
+.textarea:disabled {
+  background: var(--surface-2);
+  color: var(--text-3);
+  cursor: not-allowed;
+}
+
+.textarea,
+textarea.input {
+  min-height: 72px;
+  line-height: 1.55;
+  resize: vertical;
+}
+
+/* A select keeps the field look and redraws its own chevron: the `background` shorthand above
+   resets the image the base layer gave it, and .input-small would eat the room it needs. */
+select.input {
+  padding-right: 26px;
+  background-color: var(--surface);
+  background-image:
+    linear-gradient(45deg, transparent 50%, currentcolor 50%),
+    linear-gradient(135deg, currentcolor 50%, transparent 50%);
+  background-position:
+    right 13px top 50%,
+    right 9px top 50%;
+  background-size: 4px 4px;
+  background-repeat: no-repeat;
+}
+
+.input-small {
+  width: auto;
+  min-height: 28px;
+  padding: 3px 8px;
+  border-radius: var(--r-1);
+  font-size: var(--text-micro);
+}
+
+.field {
+  display: grid;
+  gap: var(--s-1);
+  min-width: 0;
+}
+
+.field-label {
+  font-size: var(--text-small);
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.field .input {
+  max-width: 440px;
+}
+
+.field-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-small);
+  color: var(--text-2);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.form-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+}
+
+.form-status {
+  margin-right: auto;
+  font-size: var(--text-small);
+  color: var(--text-2);
+}
+
+.form-status.tone-block {
+  color: var(--block);
+}
+
+/* ---------------------------------------------------------------- tags, chips, status */
+.sq {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 2px;
+  background: var(--tone);
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border: 1px solid color-mix(in srgb, var(--tone) 40%, transparent);
+  border-radius: var(--r-pill);
+  background: var(--tone-soft);
+  color: var(--tone);
+  font: 600 10.5px / 1.7 var(--mono);
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--s-1);
+}
+
+.chips .tag {
+  font-weight: 500;
+  white-space: normal;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: var(--text-micro);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.chip:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.decision-text {
+  color: var(--tone);
+  font: 600 10.5px / 1.5 var(--mono);
+}
+
+/* ---------------------------------------------------------------- cards */
+.card {
+  display: grid;
+  gap: var(--s-2);
+  padding: var(--s-3) var(--s-4);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--tone);
+  border-radius: var(--r-2);
+  background: var(--surface);
+  min-width: 0;
+}
+
+.card-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+}
+
+.card-head strong {
+  font-size: 14px;
+}
+
+.cards {
+  display: grid;
+  gap: var(--s-3);
+}
+
+/* ---------------------------------------------------------------- key/value */
+.kv {
+  display: grid;
+  grid-template-columns: minmax(110px, max-content) minmax(0, 1fr);
+  gap: 6px var(--s-4);
+  margin: 0;
+}
+
+.kv dt {
+  color: var(--text-3);
+  font-size: var(--text-small);
+}
+
+.kv dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* ---------------------------------------------------------------- tables */
+.table-wrap {
+  min-width: 0;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  background: var(--surface);
+}
+
+.grid {
+  width: 100%;
+  font-variant-numeric: tabular-nums;
+}
+
+.grid th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-3);
+  font: 600 10px / 1.4 var(--mono);
+  letter-spacing: 0.1em;
+  text-align: left;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.grid td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.grid tr:last-child > td {
+  border-bottom: 0;
+}
+
+.grid .num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.grid tr.is-expandable {
+  cursor: pointer;
+}
+
+.grid tr.is-expandable:hover > td,
+.grid tr.is-open > td {
+  background: var(--surface-2);
+}
+
+.grid tr.is-open > td {
+  border-bottom-color: transparent;
+}
+
+.grid tr.row-detail > td {
+  padding: var(--s-1) 10px var(--s-4);
+  background: var(--surface-2);
+}
+
+.grid tr.row-fail > td:first-child {
+  box-shadow: inset 3px 0 0 var(--block);
+}
+
+.grid.compact td {
+  padding: 5px 8px;
+}
+
+/* ---------------------------------------------------------------- feedback */
+.empty,
+.loading {
+  padding: var(--s-2) 0;
+  color: var(--text-3);
+  font-size: var(--text-small);
+}
+
+.loading::before {
+  content: "";
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: var(--s-2);
+  border: 1.5px solid var(--border-strong);
+  border-top-color: var(--thy);
+  border-radius: 50%;
+  vertical-align: -1px;
+}
+
+.notice {
+  padding: 9px var(--s-3);
+  border: 1px solid color-mix(in srgb, var(--tone) 30%, transparent);
+  border-left: 3px solid var(--tone);
+  border-radius: var(--r-2);
+  background: var(--tone-soft);
+  color: var(--text);
+  font-size: var(--text-small);
+  overflow-wrap: anywhere;
+}
+
+.skeleton {
+  display: grid;
+  gap: var(--s-2);
+}
+
+.skeleton-line {
+  height: 12px;
+  border-radius: var(--r-1);
+  background: linear-gradient(90deg, var(--skeleton-1) 25%, var(--skeleton-2) 50%, var(--skeleton-1) 75%);
+  background-size: 300% 100%;
+}
+
+.skeleton-line:nth-child(2n) {
+  width: 84%;
+}
+
+.skeleton-line:nth-child(3n) {
+  width: 62%;
+}
+
+/* ---------------------------------------------------------------- copy */
+.copyable {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+}
+
+.copyable code {
+  overflow-wrap: anywhere;
+}
+
+.copy {
+  padding: 1px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--r-1);
+  background: transparent;
+  color: var(--text-3);
+  font: 11px / 1.6 var(--sans);
+}
+
+.copy:hover {
+  border-color: var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+/* ---------------------------------------------------------------- avatars */
+.avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font: 600 11px / 1 var(--mono);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  user-select: none;
+}
+
+.avatar[data-kind="thy"] {
+  background: linear-gradient(140deg, var(--thy), color-mix(in srgb, var(--thy) 55%, var(--warn)));
+  color: var(--on-accent);
+}
+
+.avatar[data-kind="mira"] {
+  background: linear-gradient(140deg, var(--mira), color-mix(in srgb, var(--mira) 55%, var(--review)));
+  color: var(--on-accent);
+}
+
+.avatar[data-kind="user"] {
+  background: var(--surface-3);
+  color: var(--text-2);
+}
+
+.avatar[data-kind="agent"] {
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+
+.avatar[data-kind="tool"] {
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-1);
+  background: var(--surface-2);
+  color: var(--text-3);
+}
+
+/* ---------------------------------------------------------------- stacks */
+.stack {
+  display: grid;
+  gap: var(--s-4);
+  min-width: 0;
+}
+
+.stack-tight {
+  display: grid;
+  gap: var(--s-2);
+  min-width: 0;
+}
+
+/* ---------------------------------------------------------------- dialogs */
+.dialog {
+  width: min(480px, calc(100vw - 32px));
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-3);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-3);
+}
+
+.dialog::backdrop {
+  background: rgb(0 0 0 / 0.45);
+  backdrop-filter: blur(6px);
+}
+
+.dialog form,
+.dialog-form {
+  display: grid;
+  gap: var(--s-3);
+  padding: var(--s-5);
+}
+
+.dialog h2 {
+  font-size: 16px;
+}
+
+.dialog p {
+  color: var(--text-2);
+  font-size: var(--text-small);
+}
+
+.dialog label {
+  font-size: var(--text-small);
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.dialog-body {
+  color: var(--text-2);
+  font-size: var(--text-small);
+}
+
+.dialog-actions,
+.connect-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s-2);
+  margin-top: var(--s-1);
+}
+
+.connect-hint {
+  font-size: var(--text-small);
+  color: var(--text-3);
+}
+
+.connect-error {
+  color: var(--block);
+  font-size: var(--text-small);
+}
+
+.shortcut-list {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--s-2) var(--s-4);
+  align-items: center;
+  font-size: var(--text-small);
+  color: var(--text-2);
+}
