@@ -1,6 +1,7 @@
 // Small presentational building blocks shared by every view.
 
-import { h } from "./dom.js";
+import { h, replace } from "./dom.js";
+import { icon } from "./icons.js";
 import { decisionLabel, decisionTone, severityTone, statusLabel, statusTone } from "./status.js";
 
 export function tag(text, tone = "neutral", title) {
@@ -211,6 +212,84 @@ export function findingList(findings) {
       ),
     ),
   );
+}
+
+// A placeholder with the shape of the content that is still loading, so the layout does not jump
+// when the API answers. It carries no Run data at all.
+export function skeleton(lines = 3) {
+  return h(
+    "div",
+    { class: "skeleton", "aria-hidden": "true" },
+    Array.from({ length: Math.max(1, lines) }, (_, index) =>
+      h("span", { class: "skeleton-line", style: { width: `${100 - index * 12}%` } }),
+    ),
+  );
+}
+
+export function iconButton(name, { label, onClick, kind, pressed, title, disabled } = {}) {
+  const kinds = (Array.isArray(kind) ? kind : [kind]).filter(Boolean).map((entry) => `btn-${entry}`);
+  return h(
+    "button",
+    {
+      class: ["btn", "btn-icon", ...kinds],
+      type: "button",
+      "aria-label": label,
+      "aria-pressed": pressed === undefined ? null : String(Boolean(pressed)),
+      title: title ?? label,
+      disabled,
+      onClick,
+    },
+    icon(name, { size: 16 }),
+  );
+}
+
+const AVATAR_FALLBACK = { thy: "T", mira: "M", user: "Y", agent: "A" };
+
+// Who is speaking in the transcript. `tool` is the only kind drawn as a glyph; the rest carry one
+// or two letters so the colour is never the only signal.
+export function avatar(kind = "agent", text) {
+  const letters = String(text ?? "")
+    .replace(/[^A-Za-z0-9]/g, "")
+    .slice(0, kind === "user" ? 1 : 2)
+    .toUpperCase();
+  const body = kind === "tool" && !letters ? icon("tool", { size: 14 }) : letters || AVATAR_FALLBACK[kind] || "?";
+  return h("span", { class: "avatar", dataset: { kind }, "aria-hidden": "true" }, body);
+}
+
+export function kbd(text) {
+  return h("kbd", { class: "kbd" }, text);
+}
+
+// The shell's single confirmation dialog. It resolves true only when the confirm button submitted
+// the form: closing with Escape, the backdrop or Cancel resolves false.
+export function confirmDialog({ title, body, confirmLabel = "Confirm", cancelLabel = "Cancel", danger = false }) {
+  const dialog = document.getElementById("confirm");
+  if (!dialog) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    let confirmed = false;
+    const confirm = h(
+      "button",
+      { class: ["btn", danger ? "btn-danger" : "btn-primary"], type: "submit", value: "confirm", onClick: () => { confirmed = true; } },
+      confirmLabel,
+    );
+    const cancel = h("button", { class: "btn btn-ghost", type: "submit", value: "cancel" }, cancelLabel);
+    const form = h(
+      "form",
+      { method: "dialog" },
+      h("h2", { id: "confirm-title" }, title),
+      h("p", { class: "dialog-body" }, body),
+      h("div", { class: "dialog-actions" }, cancel, confirm),
+    );
+    const onClose = () => {
+      dialog.removeEventListener("close", onClose);
+      replace(dialog);
+      resolve(confirmed);
+    };
+    dialog.addEventListener("close", onClose);
+    replace(dialog, form);
+    dialog.showModal();
+    confirm.focus();
+  });
 }
 
 export function downloadBytes(name, data, mediaType) {

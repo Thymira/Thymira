@@ -125,6 +125,7 @@ export const api = {
   artifacts: (runId) => request("GET", `/runs/${segment(runId)}/artifacts`),
   artifact: (runId, artifactId) =>
     request("GET", `/runs/${segment(runId)}/artifacts/${segment(artifactId)}`),
+  project: () => request("GET", "/project"),
   projectContext: () => request("GET", "/project/context"),
   saveProjectContext: (text, expectedSha256) =>
     request("PUT", "/project/context", { body: { text, expected_sha256: expectedSha256 } }),
