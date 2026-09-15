@@ -35,6 +35,26 @@ function closingIndex(source, from, marker) {
   return at === from ? -1 : at;
 }
 
+// Emphasis follows CommonMark's flanking rule in a small form: a run opens only at a word boundary
+// and closes only at one, so the underscores inside `checking_status` and the asterisks in `a*b*c`
+// stay literal instead of turning half a JSON document into italics.
+const BOUNDARY_RE = /[\s([{"'.,;:!?)\]}]/;
+
+function opensEmphasis(line, index) {
+  const before = index === 0 ? " " : line[index - 1];
+  const after = line[index + 1] ?? " ";
+  return BOUNDARY_RE.test(before) && !/\s/.test(after);
+}
+
+function emphasisEnd(line, from, marker) {
+  for (let at = line.indexOf(marker, from); at > 0; at = line.indexOf(marker, at + 1)) {
+    if (at === from) continue;
+    const after = line[at + 1] ?? " ";
+    if (!/\s/.test(line[at - 1]) && BOUNDARY_RE.test(after)) return at;
+  }
+  return -1;
+}
+
 export function parseInlines(source) {
   const inlines = [];
   const line = String(source ?? "");
@@ -55,8 +75,8 @@ export function parseInlines(source) {
         index = end + 2;
         continue;
       }
-    } else if (character === "*" || character === "_") {
-      const end = closingIndex(line, index + 1, character);
+    } else if ((character === "*" || character === "_") && opensEmphasis(line, index)) {
+      const end = emphasisEnd(line, index + 1, character);
       if (end > 0) {
         inlines.push({ type: "em", inlines: parseInlines(line.slice(index + 1, end)) });
         index = end + 1;

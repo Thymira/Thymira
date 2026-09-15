@@ -35,3 +35,10 @@ test("an unterminated fence still yields a code block and never swallows the doc
   const blocks = parseMarkdown("```\nabc");
   assert.deepEqual(blocks, [{ type: "code", lang: "", text: "abc" }]);
 });
+
+test("emphasis opens and closes only at word boundaries, so snake_case and a*b*c stay literal", () => {
+  const [paragraph] = parseMarkdown("checking_status and a*b*c but *this* and _that_ are emphasised");
+  const ems = paragraph.inlines.filter((inline) => inline.type === "em");
+  assert.equal(ems.length, 2);
+  assert.ok(paragraph.inlines[0].text.startsWith("checking_status and a*b*c"));
+});

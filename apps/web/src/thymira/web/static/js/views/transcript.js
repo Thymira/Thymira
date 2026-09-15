@@ -189,7 +189,13 @@ function renderPlanItem(item, view) {
           )
         : empty("The plan has no items yet."),
     ],
-    { quiet: { plan_not_found: "THY has not published a plan for this thread yet." } },
+    {
+      quiet: {
+        plan_not_found: ["COMPLETED", "BLOCKED", "FAILED"].includes(view.opts?.run?.status)
+          ? "No plan was published for this thread."
+          : "THY has not published a plan for this thread yet.",
+      },
+    },
   );
   return turn("plan", avatar("thy"), "THY", item.ts, h("div", { class: "plan-card" }, body));
 }
@@ -219,15 +225,32 @@ function renderMessage(item) {
   return turn("message", agentFace(name), name, item.ts, h("div", { class: "prose" }, renderMarkdown(item.text)));
 }
 
+// An agent's settlement reads "data completed: {…}" or "coding failed: Traceback…": the label is
+// prose, and a JSON or multi-line tail is code, never italics because of the underscores in it.
+const SUMMARY_RE = /^([^\n:]{1,80}):\s*([\s\S]*)$/;
+
+function summaryBody(text) {
+  const prose = () => h("div", { class: "agent-summary prose" }, renderMarkdown(text));
+  const match = SUMMARY_RE.exec(String(text ?? ""));
+  if (!match) return prose();
+  const [, label, tail] = match;
+  const trimmed = tail.trim();
+  let body = null;
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    try {
+      body = codeBlock(JSON.parse(trimmed));
+    } catch {
+      body = null;
+    }
+  }
+  if (!body && trimmed.includes("\n")) body = codeBlock(trimmed);
+  if (!body) return prose();
+  return h("div", { class: "agent-summary" }, h("p", { class: "small muted" }, label), body);
+}
+
 function renderAgentSummary(item) {
   const name = item.agent || "THY";
-  return turn(
-    "agent_summary",
-    agentFace(name),
-    name,
-    item.ts,
-    h("div", { class: "agent-summary prose" }, renderMarkdown(item.text)),
-  );
+  return turn("agent_summary", agentFace(name), name, item.ts, summaryBody(item.text));
 }
 
 function renderStage(item) {
