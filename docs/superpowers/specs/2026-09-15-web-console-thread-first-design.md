@@ -29,8 +29,8 @@ pass-through under a `default-src 'none'` Content-Security-Policy.
 |---|---|---|
 | Run | **Thread** | one prompt, its work and its evidence; the sidebar item |
 | Workspace served by the API | **Project** | its knowledge (`context.md`) and datasets |
-| THY | **THY** (weaver glyph, orange accent) | the intelligence that acts |
-| MIRA | **MIRA** (thread glyph, teal accent) | the intelligence that watches |
+| THY | **THY** (weaver glyph, logo blue) | the intelligence that acts |
+| MIRA | **MIRA** (thread glyph, logo orange) | the intelligence that watches |
 | `human.approval_requested` | **Review** | "an approval authorizes exactly one call, once" stays in the card |
 | risk interview question | **Question** | answered from the composer |
 
@@ -246,7 +246,10 @@ is plain text. Angle brackets are text. Nothing else is interpreted.
 
 ## 12. Design system (`css/tokens.css`)
 
-Dark-first, warm neutrals, two brand accents. Tokens on `:root` (light), overridden under
+Dark-first, warm neutrals, one orange action accent and the two brand colours of the product
+logo (THY blue, MIRA orange, as the favicon draws them). `--accent` drives buttons, focus and
+selection; `--thy`/`--mira` mark only what belongs to one orchestrator (avatars, the wordmark,
+the stepper's current step, orchestrator panels, the settings swatches). Tokens on `:root` (light), overridden under
 `:root[data-theme="dark"]` and, for `data-theme="system"`, under `prefers-color-scheme: dark`.
 
 | token | light | dark |
@@ -260,8 +263,9 @@ Dark-first, warm neutrals, two brand accents. Tokens on `:root` (light), overrid
 | `--text` | `#1b1a17` | `#eceae4` |
 | `--text-2` | `#5b5850` | `#b1ada3` |
 | `--text-3` | `#8b877c` | `#7d7970` |
-| `--thy` (accent) | `#d9531e` | `#ff7a45` |
-| `--mira` | `#0f8b8d` | `#4cc9cc` |
+| `--accent` (actions, focus, selection) | `#d9531e` | `#ff7a45` |
+| `--thy` (the product logo's blue) | `#1b2e63` | `#7c97f2` |
+| `--mira` (the product logo's orange) | `#c2410c` | `#ff7438` |
 | `--ok` | `#1f8a4c` | `#4fcf7a` |
 | `--caution` | `#4f9d5f` | `#8fd6a0` |
 | `--warn` | `#b3701a` | `#e3a23b` |
@@ -276,7 +280,7 @@ Dark-first, warm neutrals, two brand accents. Tokens on `:root` (light), overrid
 - Radius: 6px chips, 10px cards and rows, 14px composer and dialogs, 999px pills.
 - Elevation: light mode shadows (`0 1px 2px rgb(0 0 0 / .05)`, popovers
   `0 12px 32px rgb(0 0 0 / .12)`); dark mode uses lighter surfaces and 1px borders instead.
-- Focus: 2px `--thy` ring with 2px offset on `:focus-visible` only.
+- Focus: 2px `--accent` ring with 2px offset on `:focus-visible` only.
 - Icons: `icons.js` builds inline SVGs (24px grid, 1.75 stroke, Lucide-like) with
   `createElementNS`; ~28 names (plus, search, settings, sun, moon, monitor, sidebar, panel,
   check, x, play, pause, square, alert, info, file, image, table, tool, agent, shield, thread,

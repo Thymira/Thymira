@@ -75,6 +75,15 @@
   white-space: nowrap;
 }
 
+/* The product logo's two halves: THY blue, MIRA orange. */
+.wordmark-thy {
+  color: var(--thy);
+}
+
+.wordmark-mira {
+  color: var(--mira);
+}
+
 .sidebar-collapse {
   flex: none;
   color: var(--text-3);
@@ -250,7 +259,7 @@
   bottom: 8px;
   width: 3px;
   border-radius: var(--r-pill);
-  background: var(--thy);
+  background: var(--accent);
 }
 
 .thread-dot {
@@ -290,8 +299,8 @@
   justify-self: start;
   padding: 1px 7px;
   border-radius: var(--r-pill);
-  background: var(--thy-soft);
-  color: var(--thy);
+  background: var(--accent-soft);
+  color: var(--accent);
   font: 600 10.5px / 1.6 var(--mono);
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -477,7 +486,7 @@
 }
 
 .inspector-badge[data-attention="true"] {
-  background: var(--thy);
+  background: var(--accent);
   color: var(--on-accent);
 }
 
@@ -499,10 +508,10 @@
   width: 100%;
   margin-bottom: var(--s-3);
   padding: 6px 10px;
-  border: 1px solid var(--thy-line);
+  border: 1px solid var(--accent-line);
   border-radius: var(--r-1);
-  background: var(--thy-soft);
-  color: var(--thy);
+  background: var(--accent-soft);
+  color: var(--accent);
   font-size: var(--text-small);
   font-weight: 600;
 }
@@ -530,7 +539,7 @@
 
 .inspector-resize:hover::after,
 .inspector-resize:focus-visible::after {
-  background: var(--thy);
+  background: var(--accent);
 }
 
 /* ---------------------------------------------------------------- scrim */
@@ -685,7 +694,7 @@
 
 .palette-item mark {
   background: none;
-  color: var(--thy);
+  color: var(--accent);
   font-weight: 600;
 }
 

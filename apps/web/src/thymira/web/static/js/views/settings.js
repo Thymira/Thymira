@@ -17,6 +17,15 @@ import { button, errorNotice, loading } from "../ui.js";
 
 const NAMESPACE = "models";
 
+// The two orchestrators get a THY/MIRA colour swatch on their own field; the shared tiers below
+// them route generic sub-agent work and belong to neither, so they stay unmarked.
+const OWNER_TONE = { THYMIRA_THY_MODEL: "thy", THYMIRA_MIRA_MODEL: "mira" };
+
+function fieldLabel(key, label) {
+  const tone = OWNER_TONE[key];
+  return tone ? [h("i", { class: `sq tone-${tone}`, "aria-hidden": "true" }), label] : label;
+}
+
 const FIELDS = [
   ["THYMIRA_THY_MODEL", "THY (orchestrator)", "e.g. anthropic/claude-opus-5"],
   ["THYMIRA_MIRA_MODEL", "MIRA (auditor)", "e.g. anthropic/claude-opus-5"],
@@ -186,7 +195,9 @@ export class SettingsView {
       "div",
       { class: "stack-tight" },
       h("datalist", { id: MODEL_LIST_ID }, MODEL_SUGGESTIONS.map((model) => h("option", { value: model }))),
-      FIELDS.map(([key, label]) => h("label", { class: "field" }, h("span", { class: "field-label" }, label), inputs.get(key))),
+      FIELDS.map(([key, label]) =>
+        h("label", { class: "field" }, h("span", { class: "field-label" }, fieldLabel(key, label)), inputs.get(key)),
+      ),
       h("div", { class: "form-actions" }, status, save),
     );
   }

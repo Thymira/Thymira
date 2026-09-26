@@ -222,9 +222,17 @@ details > summary:not(.no-marker)::before,
 }
 
 .step.is-current .step-dot {
-  --tone: var(--thy);
+  --tone: var(--accent);
 
   animation: pulse var(--d-pulse) var(--ease-move) infinite;
+}
+
+.step.is-owner-thy.is-current .step-dot {
+  --tone: var(--thy);
+}
+
+.step.is-owner-mira.is-current .step-dot {
+  --tone: var(--mira);
 }
 
 .inspector-badge[data-attention="true"],

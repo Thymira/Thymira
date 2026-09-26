@@ -14,6 +14,15 @@
   overflow: hidden;
 }
 
+/* A panel that belongs to one orchestrator carries its colour on the leading edge. */
+.panel.is-thy {
+  border-left: 3px solid var(--thy);
+}
+
+.panel.is-mira {
+  border-left: 3px solid var(--mira);
+}
+
 .panel-head {
   display: flex;
   align-items: center;
@@ -432,7 +441,7 @@
 
 .file.is-selected {
   background: var(--surface-2);
-  border-left-color: var(--thy);
+  border-left-color: var(--accent);
 }
 
 .file.is-invalid .file-name {
@@ -510,7 +519,7 @@
   display: block;
   height: 100%;
   border-radius: var(--r-pill);
-  background: linear-gradient(90deg, var(--thy), color-mix(in srgb, var(--thy) 60%, var(--warn)));
+  background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 60%, var(--warn)));
 }
 
 .bar-value {

@@ -125,13 +125,13 @@
 }
 
 .step.is-done .step-dot {
-  border-color: var(--thy);
-  background: var(--thy);
+  border-color: var(--accent);
+  background: var(--accent);
 }
 
 .step.is-done .step-line,
 .step.is-done:not(:last-child)::after {
-  background: var(--thy-line);
+  background: var(--accent-line);
 }
 
 .step.is-current {
@@ -140,9 +140,22 @@
 }
 
 .step.is-current .step-dot {
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: 0 0 0 0 var(--accent-line);
+}
+
+/* Whose turn it is: THY drives Plan, Execute and Report, MIRA the Audit. */
+.step.is-owner-thy.is-current .step-dot {
   border-color: var(--thy);
   background: var(--thy);
   box-shadow: 0 0 0 0 var(--thy-line);
+}
+
+.step.is-owner-mira.is-current .step-dot {
+  border-color: var(--mira);
+  background: var(--mira);
+  box-shadow: 0 0 0 0 var(--mira-line);
 }
 
 .step.tone-ok,
@@ -266,7 +279,7 @@
 }
 
 .prose a {
-  color: var(--thy);
+  color: var(--accent);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -665,7 +678,7 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--thy);
+  background: var(--accent);
 }
 
 /* Sticky, not absolute: an absolutely positioned child of the scroller is laid out in
@@ -692,7 +705,7 @@
 }
 
 .scroll-pill:hover {
-  border-color: var(--thy);
+  border-color: var(--accent);
   color: var(--text);
 }
 
@@ -708,7 +721,7 @@
 }
 
 .composer:focus-within {
-  border-color: var(--thy);
+  border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--ring), var(--shadow-2);
 }
 
@@ -797,7 +810,7 @@
   flex: none;
   border: 0;
   border-radius: 50%;
-  background: var(--thy);
+  background: var(--accent);
   color: var(--on-accent);
 }
 
@@ -807,7 +820,7 @@
 }
 
 .composer-send:not(:disabled):hover {
-  background: color-mix(in srgb, var(--thy) 88%, var(--text));
+  background: color-mix(in srgb, var(--accent) 88%, var(--text));
 }
 
 .composer-review {
@@ -888,7 +901,39 @@
 }
 
 .home-card svg {
+  color: var(--accent);
+}
+
+.home-card[data-owner="thy"] svg {
   color: var(--thy);
+}
+
+.home-card[data-owner="mira"] svg {
+  color: var(--mira);
+}
+
+/* Who is who, in one line: the two orchestrators and what each one does. */
+.home-legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--s-2) var(--s-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-small);
+}
+
+.home-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.home-legend .avatar {
+  width: 22px;
+  height: 22px;
+  font-size: 10px;
 }
 
 .home-card strong {

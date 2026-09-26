@@ -26,8 +26,9 @@
   --text-3: #6f6b61;
 
   /* ---------------------------------------------------------------- accents (light) */
-  --thy: #d9531e;
-  --mira: #0f8b8d;
+  --accent: #d9531e;
+  --thy: #1b2e63;
+  --mira: #c2410c;
 
   /* ---------------------------------------------------------------- state (light) */
   --ok: #1f8a4c;
@@ -54,8 +55,10 @@
 
   /* ---------------------------------------------------------------- derived tints
      These reference the palette above, so they follow whichever theme is active. */
+  --accent-soft: color-mix(in srgb, var(--accent) 12%, transparent);
   --thy-soft: color-mix(in srgb, var(--thy) 12%, transparent);
   --thy-line: color-mix(in srgb, var(--thy) 34%, transparent);
+  --accent-line: color-mix(in srgb, var(--accent) 34%, transparent);
   --mira-soft: color-mix(in srgb, var(--mira) 12%, transparent);
   --mira-line: color-mix(in srgb, var(--mira) 34%, transparent);
   /* --tone only. A soft tint cannot live here: a custom property that references
@@ -63,7 +66,7 @@
      :root computes once against this default and inherits that grey past every
      .tone-* class. Each consumer mixes var(--tone) at its own use site instead. */
   --tone: var(--text-3);
-  --ring: color-mix(in srgb, var(--thy) 24%, transparent);
+  --ring: color-mix(in srgb, var(--accent) 24%, transparent);
   --hover: color-mix(in srgb, var(--text) 5%, transparent);
   --press: color-mix(in srgb, var(--text) 9%, transparent);
   --code-bg: var(--surface-2);
@@ -132,8 +135,9 @@
   --text-2: #b1ada3;
   --text-3: #8f8b81;
 
-  --thy: #ff7a45;
-  --mira: #4cc9cc;
+  --accent: #ff7a45;
+  --thy: #7c97f2;
+  --mira: #ff7438;
 
   --ok: #4fcf7a;
   --caution: #8fd6a0;
@@ -170,8 +174,9 @@
     --text-2: #b1ada3;
     --text-3: #8f8b81;
 
-    --thy: #ff7a45;
-    --mira: #4cc9cc;
+    --accent: #ff7a45;
+    --thy: #7c97f2;
+    --mira: #ff7438;
 
     --ok: #4fcf7a;
     --caution: #8fd6a0;

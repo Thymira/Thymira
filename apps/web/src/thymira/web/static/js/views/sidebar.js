@@ -142,7 +142,12 @@ export class Sidebar {
           "span",
           { class: "wordmark" },
           h("span", { class: "wordmark-glyph", "aria-hidden": "true" }, h("i"), h("i"), h("i"), h("i")),
-          h("span", { class: "wordmark-name" }, "THYMIRA"),
+          h(
+            "span",
+            { class: "wordmark-name" },
+            h("span", { class: "wordmark-thy" }, "THY"),
+            h("span", { class: "wordmark-mira" }, "MIRA"),
+          ),
         ),
         this.collapseButton,
       ),

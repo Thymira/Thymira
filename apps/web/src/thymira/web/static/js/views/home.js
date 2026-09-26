@@ -11,15 +11,21 @@ import { headline, relative } from "../format.js";
 import { icon } from "../icons.js";
 import { href } from "../router.js";
 import { statusLabel, statusTone } from "../status.js";
+import { avatar } from "../ui.js";
 import { Composer } from "./composer.js";
 
 const DRAFT_KEY = "thymira.console.draft";
 const RECENT_LIMIT = 5;
 
 const CARDS = [
-  ["search", "Inspect → Plan → Execute → Report", "THY registers the project's datasets, plans the work and reports what it found."],
-  ["alert", "Questions and reviews wait for you", "The risk interview and every tool call with side effects stop the thread until you answer."],
-  ["shield", "MIRA audits before it completes", "An independent auditor checks the work against methodology and regulation; the Policy Engine decides."],
+  ["search", "Inspect → Plan → Execute → Report", "THY registers the project's datasets, plans the work and reports what it found.", "thy"],
+  ["alert", "Questions and reviews wait for you", "The risk interview and every tool call with side effects stop the thread until you answer.", null],
+  ["shield", "MIRA audits before it completes", "An independent auditor checks the work against methodology and regulation; the Policy Engine decides.", "mira"],
+];
+
+const ORCHESTRATORS = [
+  ["thy", "THY", "runs the data-science work"],
+  ["mira", "MIRA", "audits it against methodology and regulation"],
 ];
 
 function readDraft() {
@@ -73,8 +79,21 @@ export class HomeView {
           h(
             "div",
             { class: "home-cards" },
-            CARDS.map(([name, title, body]) =>
-              h("div", { class: "home-card" }, icon(name, { size: 18 }), h("strong", null, title), h("span", null, body)),
+            CARDS.map(([name, title, body, owner]) =>
+              h(
+                "div",
+                { class: "home-card", dataset: owner ? { owner } : undefined },
+                icon(name, { size: 18 }),
+                h("strong", null, title),
+                h("span", null, body),
+              ),
+            ),
+          ),
+          h(
+            "ul",
+            { class: "home-legend", "aria-label": "Orchestrators" },
+            ORCHESTRATORS.map(([kind, name, role]) =>
+              h("li", null, avatar(kind), h("strong", { class: `wordmark-${kind}` }, name), h("span", { class: "muted" }, role)),
             ),
           ),
           this.recent,

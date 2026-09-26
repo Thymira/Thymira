@@ -39,19 +39,19 @@
 
 .btn-primary {
   border-color: transparent;
-  background: var(--thy);
+  background: var(--accent);
   color: var(--on-accent);
   box-shadow: var(--shadow-1);
 }
 
 .btn-primary:hover {
   border-color: transparent;
-  background: color-mix(in srgb, var(--thy) 88%, var(--text));
+  background: color-mix(in srgb, var(--accent) 88%, var(--text));
   color: var(--on-accent);
 }
 
 .btn-primary:active {
-  background: color-mix(in srgb, var(--thy) 78%, var(--text));
+  background: color-mix(in srgb, var(--accent) 78%, var(--text));
 }
 
 .btn-ghost {
@@ -132,7 +132,7 @@
 
 /* The header's inspector toggle when a review or a question is waiting. */
 .btn-icon[data-attention="true"] {
-  color: var(--thy);
+  color: var(--accent);
 }
 
 .btn-icon[data-attention="true"]::after {
@@ -143,7 +143,7 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--thy);
+  background: var(--accent);
 }
 
 .btn-icon.btn-small {
@@ -181,7 +181,7 @@
 .input:focus,
 .textarea:focus {
   outline: none;
-  border-color: var(--thy);
+  border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--ring);
 }
 
@@ -473,7 +473,7 @@ select.input {
   height: 9px;
   margin-right: var(--s-2);
   border: 1.5px solid var(--border-strong);
-  border-top-color: var(--thy);
+  border-top-color: var(--accent);
   border-radius: 50%;
   vertical-align: -1px;
 }
@@ -546,12 +546,12 @@ select.input {
 }
 
 .avatar[data-kind="thy"] {
-  background: linear-gradient(140deg, var(--thy), color-mix(in srgb, var(--thy) 55%, var(--warn)));
+  background: linear-gradient(140deg, var(--thy), color-mix(in srgb, var(--thy) 60%, var(--review)));
   color: var(--on-accent);
 }
 
 .avatar[data-kind="mira"] {
-  background: linear-gradient(140deg, var(--mira), color-mix(in srgb, var(--mira) 55%, var(--review)));
+  background: linear-gradient(140deg, var(--mira), color-mix(in srgb, var(--mira) 60%, var(--warn)));
   color: var(--on-accent);
 }
 

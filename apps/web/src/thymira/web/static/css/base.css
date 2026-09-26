@@ -64,7 +64,7 @@ a {
 }
 
 a:hover {
-  color: var(--thy);
+  color: var(--accent);
 }
 
 img,
@@ -151,7 +151,7 @@ input[type="checkbox"],
 input[type="radio"] {
   width: 15px;
   height: 15px;
-  accent-color: var(--thy);
+  accent-color: var(--accent);
   cursor: pointer;
 }
 
@@ -188,7 +188,7 @@ progress {
   border: 0;
   border-radius: var(--r-pill);
   background: var(--surface-3);
-  color: var(--thy);
+  color: var(--accent);
   overflow: hidden;
 }
 
@@ -198,12 +198,12 @@ progress::-webkit-progress-bar {
 }
 
 progress::-webkit-progress-value {
-  background: var(--thy);
+  background: var(--accent);
   border-radius: var(--r-pill);
 }
 
 progress::-moz-progress-bar {
-  background: var(--thy);
+  background: var(--accent);
   border-radius: var(--r-pill);
 }
 
@@ -242,7 +242,7 @@ details[open] > summary:not(.no-marker)::before {
 }
 
 :focus-visible {
-  outline: 2px solid var(--thy);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
   border-radius: var(--r-1);
 }
