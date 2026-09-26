@@ -102,7 +102,7 @@ export class HomeView {
     try {
       const body = await api.projectDatasets();
       this.datasets = (body?.items ?? []).map((dataset) => ({ name: dataset.name }));
-      if (!this.disposed) this.composer.setState({ kind: "new" });
+      if (!this.disposed) this.composer.setDatasets();
     } catch {
       // The chips are a convenience; a prompt can always name a dataset by hand.
     }
@@ -112,7 +112,7 @@ export class HomeView {
     this.eyebrow.textContent = summary?.name ? `${summary.name} · New thread` : "New thread";
     if (summary?.datasets?.length && !this.datasets.length) {
       this.datasets = summary.datasets.map((name) => ({ name }));
-      this.composer.setState({ kind: "new" });
+      this.composer.setDatasets();
     }
   }
 

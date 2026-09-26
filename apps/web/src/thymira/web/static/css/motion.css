@@ -33,14 +33,17 @@
   }
 }
 
+/* The ring reads the tone on the element that sets it, and starts opaque enough to be
+   seen: a 14% tint expanding to transparent peaked at about 7% alpha, which was no
+   pulse at all. */
 @keyframes pulse {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 var(--tone-soft);
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--tone) 55%, transparent);
   }
 
-  50% {
-    box-shadow: 0 0 0 4px transparent;
+  70%,
+  100% {
+    box-shadow: 0 0 0 5px transparent;
   }
 }
 
@@ -147,6 +150,14 @@
     width var(--d-3) var(--ease-move);
 }
 
+/* Right for opening and collapsing, wrong under a pointer: while the inspector handle
+   is dragged the column follows the cursor instead of animating towards it. */
+.shell[data-resizing],
+.shell[data-resizing] .sidebar,
+.shell[data-resizing] .inspector {
+  transition: none;
+}
+
 .scrim {
   animation: fade var(--d-2) var(--ease-enter);
 }
@@ -217,6 +228,7 @@ details > summary:not(.no-marker)::before,
 }
 
 .inspector-badge[data-attention="true"],
+.btn-icon[data-attention="true"]::after,
 .thread-attention {
   animation: pop var(--d-2) var(--ease-enter);
 }

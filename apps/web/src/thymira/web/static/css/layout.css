@@ -339,16 +339,24 @@
   padding: var(--s-2) 0;
 }
 
-.shell[data-sidebar="collapsed"] .sidebar > :not(.icon-rail) {
-  display: none;
+/* Only the wide layout collapses to the rail. Below 900px the sidebar is a drawer and
+   shows its full contents, so the collapse rules simply do not apply and no override
+   has to undo them. */
+@media (min-width: 900px) {
+  .shell[data-sidebar="collapsed"] .sidebar > :not(.icon-rail) {
+    display: none;
+  }
+
+  .shell[data-sidebar="collapsed"] .icon-rail {
+    display: flex;
+  }
 }
 
-.shell[data-sidebar="collapsed"] .icon-rail {
-  display: flex;
-}
-
-.menu-button {
+/* Scoped past .btn, which components.css declares later with the same specificity. */
+.main > .menu-button {
   display: none;
+  align-self: flex-start;
+  margin: var(--s-2) 0 0 var(--s-2);
 }
 
 /* ---------------------------------------------------------------- main */
@@ -412,8 +420,11 @@
   color: var(--text);
 }
 
+/* Eleven panels never fit the strip. The mask fades both ends so it reads as
+   scrollable, and Inspector.markTabs() scrolls the current tab into view. */
 .inspector-tabs {
   flex: none;
+  position: relative;
   display: flex;
   gap: 2px;
   padding: var(--s-2) var(--s-2);
@@ -421,6 +432,8 @@
   overflow-x: auto;
   scrollbar-width: none;
   background: var(--surface-2);
+  mask-image:
+    linear-gradient(90deg, transparent 0, #000 12px, #000 calc(100% - 20px), transparent 100%);
 }
 
 .inspector-tabs::-webkit-scrollbar {
@@ -665,6 +678,11 @@
   cursor: pointer;
 }
 
+.palette-item:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
 .palette-item mark {
   background: none;
   color: var(--thy);
@@ -739,15 +757,7 @@
     transform: translateX(0);
   }
 
-  .shell[data-sidebar="collapsed"] .sidebar > :not(.icon-rail) {
-    display: revert;
-  }
-
-  .shell[data-sidebar="collapsed"] .icon-rail {
-    display: none;
-  }
-
-  .menu-button {
+  .main > .menu-button {
     display: inline-flex;
   }
 

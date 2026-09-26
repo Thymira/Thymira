@@ -94,17 +94,25 @@ const menuButton = iconButton("sidebar", {
   onClick: () => toggleSidebar(),
 });
 menuButton.classList.add("menu-button");
-Object.assign(menuButton.style, { alignSelf: "flex-start", margin: "8px 0 0 8px" });
 mainRoot.append(menuButton);
 
 function syncMenuButton() {
   menuButton.hidden = !narrow.matches;
 }
 
+// One scrim serves the drawer and the inspector sheet: it is up while either of them overlays the
+// page, so a click beside an open sheet closes it instead of doing nothing.
+let inspectorOverlay = false;
+
+function syncScrim() {
+  const drawer = shell.dataset.sidebar === "drawer-open";
+  scrim.hidden = !(drawer || (inspectorOverlay && overlayInspector.matches));
+}
+
 function closeDrawer() {
   if (shell.dataset.sidebar !== "drawer-open") return;
   shell.dataset.sidebar = readPref("sidebar", "open") === "collapsed" ? "collapsed" : "open";
-  scrim.hidden = true;
+  syncScrim();
 }
 
 function toggleSidebar() {
@@ -113,7 +121,7 @@ function toggleSidebar() {
     if (open) closeDrawer();
     else {
       shell.dataset.sidebar = "drawer-open";
-      scrim.hidden = false;
+      syncScrim();
     }
     return;
   }
@@ -136,6 +144,13 @@ function toggleInspector() {
   navigate({ view: "thread", runId: view.runId, panel, item: null });
 }
 
+function closeOverlayInspector() {
+  if (shell.dataset.inspector !== "open" || !overlayInspector.matches) return false;
+  if (!(view instanceof ThreadView)) return false;
+  navigate({ view: "thread", runId: view.runId, panel: null, item: null });
+  return true;
+}
+
 function onEscape() {
   if (palette.isOpen) {
     palette.close();
@@ -145,9 +160,7 @@ function onEscape() {
     closeDrawer();
     return;
   }
-  if (shell.dataset.inspector === "open" && overlayInspector.matches && view instanceof ThreadView) {
-    navigate({ view: "thread", runId: view.runId, panel: null, item: null });
-  }
+  closeOverlayInspector();
 }
 
 // A sheet, not a confirmation: it lists the bindings and closes. It borrows the shell's single
@@ -232,6 +245,8 @@ function replaceView(options, build) {
 function closeInspector() {
   shell.dataset.inspector = "closed";
   inspectorRoot.hidden = true;
+  inspectorOverlay = false;
+  syncScrim();
 }
 
 function openCreatedRun(run) {
@@ -244,8 +259,14 @@ function openCreatedRun(run) {
 const threadHooks = {
   onRunChanged: (run) => sidebar.upsert(run),
   onRunCreated: (run) => openCreatedRun(run),
+  onInspectorOverlay: (open) => {
+    inspectorOverlay = open;
+    syncScrim();
+  },
   onInspectorChange: (panel) => {
-    writePref("inspectorPanel", panel ?? undefined);
+    // Only an open panel is remembered: closing the inspector must not erase which panel Ctrl+I
+    // should bring back.
+    if (panel) writePref("inspectorPanel", panel);
     const runId = view?.runId;
     if (!runId) return;
     const current = parseRoute(window.location.hash);
@@ -307,6 +328,9 @@ function syncConnection() {
 
 function disconnect() {
   clearToken();
+  // The refresh below provokes a 401 the operator asked for; it must not pop the connect dialog
+  // straight back open.
+  dismissed = true;
   project = null;
   projectLoaded = false;
   sidebar.setProject(null);
@@ -402,11 +426,15 @@ closeInspector();
 banner.textContent = OFFLINE_TEXT;
 syncMenuButton();
 
-scrim.addEventListener("click", () => closeDrawer());
+scrim.addEventListener("click", () => {
+  if (shell.dataset.sidebar === "drawer-open") closeDrawer();
+  else closeOverlayInspector();
+});
 narrow.addEventListener("change", () => {
   syncMenuButton();
   closeDrawer();
 });
+overlayInspector.addEventListener("change", () => syncScrim());
 
 installShortcuts([
   { keys: "ctrl+k", whenTyping: true, run: () => palette.toggle() },

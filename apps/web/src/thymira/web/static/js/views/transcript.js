@@ -122,9 +122,11 @@ function renderQuestion(item) {
 
 function renderAnswer(item) {
   if (item.source === "project_context") {
+    // A quiet note, not a stage divider: the transcript's structural markers stay scannable.
     return h(
       "div",
-      { class: "stage-divider" },
+      { class: "quiet-note" },
+      icon("info", { size: 13 }),
       ["Answered from context.md", item.field ? ` · ${item.field}` : ""].join(""),
     );
   }
@@ -376,13 +378,22 @@ function renderReview(item, view) {
   const status = h("span", { class: "form-status", role: "status" });
   const approve = h("button", { class: "btn btn-approve", type: "button" }, item.toolCall ? "Approve this call" : "Approve");
   const reject = h("button", { class: "btn btn-danger", type: "button" }, "Reject");
-  const decide = (approved) => () => {
+  // A refused call (a gate that is no longer parked, a dropped connection) records no event, so
+  // nothing would redraw this card: it reports the failure and hands the controls back itself.
+  const decide = (approved) => async () => {
     approve.disabled = true;
     reject.disabled = true;
     note.disabled = true;
+    status.className = "form-status";
     status.textContent = approved ? "Recording the approval…" : "Recording the rejection…";
     const answer = approved ? view.deps.onApprove : view.deps.onReject;
-    answer?.(item.decisionId, note.value.trim());
+    const failure = await answer?.(item.decisionId, note.value.trim());
+    if (!failure) return;
+    approve.disabled = false;
+    reject.disabled = false;
+    note.disabled = false;
+    status.className = "form-status tone-block";
+    status.textContent = failure;
   };
   approve.addEventListener("click", decide(true));
   reject.addEventListener("click", decide(false));
@@ -546,7 +557,7 @@ export class Transcript {
         nodes.push(entry.node);
         continue;
       }
-      const built = this.build(item, created);
+      const built = this.build(item, created, !entry);
       if (!built) continue;
       this.nodes.set(item.key, { kind: item.kind, version: item.version, signature, ...built });
       nodes.push(built.node);
@@ -554,13 +565,16 @@ export class Transcript {
     return nodes;
   }
 
-  build(item, created) {
+  build(item, created, isNew) {
     const make = RENDERERS[item.kind];
     if (!make) return null;
     const result = make(item, this);
     const built = result instanceof Node ? { node: result } : result;
     built.wire?.(this);
     if (built.children) syncChildren(built.children, this.renderList(item.items ?? [], created));
+    // Only an arrival rises. An item rebuilt because its status changed is already on the screen:
+    // animating it again would blank it out for the length of its stagger, mid-thread.
+    if (!isNew) return built;
     // The stagger only reads well for the first few arrivals; beyond that it becomes a wait.
     built.node.dataset.enter = "true";
     built.node.style.setProperty("--i", String(Math.min(created.count, MAX_STAGGER)));
@@ -593,7 +607,9 @@ export class Transcript {
     const entry = this.nodes.get(key);
     if (!entry) return;
     if (entry.node.tagName === "DETAILS") entry.node.open = true;
-    entry.node.scrollIntoView({ block: "center", behavior: "smooth" });
+    // A script-driven smooth scroll is an animation the reduced-motion media block cannot zero.
+    const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    entry.node.scrollIntoView({ block: "center", behavior: reduced ? "auto" : "smooth" });
   }
 
   atBottom() {

@@ -57,6 +57,7 @@ export class CommandPalette {
   constructor(host, { commands }) {
     this.host = host;
     this.commands = commands;
+    this.shell = null;
     this.open_ = false;
     this.selected = 0;
     this.rows = [];
@@ -78,7 +79,9 @@ export class CommandPalette {
       h("div", { class: "palette-hint" }, "↑↓ to move · Enter to run · Esc to close"),
     );
     this.input.addEventListener("input", () => this.refresh());
-    this.input.addEventListener("keydown", (event) => this.onKey(event));
+    // The whole card listens, not only the field: Escape and Tab must be caught wherever the focus
+    // is inside the palette.
+    this.card.addEventListener("keydown", (event) => this.onKey(event));
     this.host.addEventListener("mousedown", (event) => {
       if (event.target === this.host) this.close();
     });
@@ -94,6 +97,10 @@ export class CommandPalette {
     this.restoreFocus = document.activeElement;
     replace(this.host, this.card);
     this.host.hidden = false;
+    // It claims to be modal, so it has to be one: the shell behind it stops taking focus and
+    // clicks for as long as the palette is up, and Tab cycles inside the card.
+    this.shell = document.getElementById("shell");
+    if (this.shell) this.shell.inert = true;
     this.input.value = "";
     this.selected = 0;
     this.refresh();
@@ -105,6 +112,7 @@ export class CommandPalette {
     this.open_ = false;
     this.host.hidden = true;
     replace(this.host);
+    if (this.shell) this.shell.inert = false;
     if (this.restoreFocus?.isConnected) this.restoreFocus.focus();
     this.restoreFocus = null;
   }
@@ -114,12 +122,33 @@ export class CommandPalette {
     else this.open();
   }
 
+  // Focus stays inside the card: the first stop is the field, the last is the last row.
+  trapTab(event) {
+    const stops = [this.input, ...this.list.querySelectorAll("button")];
+    const last = stops[stops.length - 1];
+    const active = document.activeElement;
+    if (event.shiftKey && (active === this.input || !this.card.contains(active))) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && active === last) {
+      event.preventDefault();
+      this.input.focus();
+    }
+  }
+
   onKey(event) {
     if (event.key === "Escape") {
       event.preventDefault();
       this.close();
       return;
     }
+    if (event.key === "Tab") {
+      this.trapTab(event);
+      return;
+    }
+    // A row button runs itself on Enter and moves with the arrows through the roving selection
+    // below, so only the field drives the list.
+    if (event.target !== this.input) return;
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       if (!this.rows.length) return;
@@ -173,6 +202,12 @@ export class CommandPalette {
         h("span", { class: "palette-item-label" }, highlight(entry.command.label, entry.match.indices)),
         entry.command.hint ? h("span", { class: "palette-item-hint" }, entry.command.hint) : null,
       );
+      // The pointer and the keyboard agree on one selection: hovering a row moves it.
+      row.addEventListener("mousemove", () => {
+        if (this.selected === index) return;
+        this.selected = index;
+        this.paint();
+      });
       nodes.push(row);
     });
     if (!nodes.length) nodes.push(h("p", { class: "empty" }, "Nothing matches."));

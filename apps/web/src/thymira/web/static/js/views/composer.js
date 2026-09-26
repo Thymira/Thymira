@@ -9,6 +9,8 @@
 import { h, replace } from "../dom.js";
 import { clip } from "../format.js";
 import { icon } from "../icons.js";
+import { stageLabel } from "../thread-fold.js";
+import { toast } from "../toast.js";
 import { button, skeleton } from "../ui.js";
 
 const HINT = "Enter to send · Shift+Enter for a new line";
@@ -24,6 +26,14 @@ const PLACEHOLDER = {
 };
 
 const SENDING_STATES = new Set(["new", "answer", "ended"]);
+
+// A thread can start needing the operator without the operator having touched anything: the 400 ms
+// batch flips the surface. The shell's toasts host is aria-live, so the transition is spoken there
+// instead of changing silently for anyone not looking at the composer.
+const ANNOUNCEMENT = {
+  answer: "A question is waiting for your answer.",
+  review: "A tool call is waiting for your review.",
+};
 
 // What a state says, as one comparable string: the surface only has to be rebuilt when this
 // changes.
@@ -87,21 +97,33 @@ export class Composer {
   // ---------------------------------------------------------------- state
 
   // The thread recomputes its composer state on every 400 ms batch. Redrawing an unchanged surface
-  // would detach the textarea and take the focus away from whoever is typing in it, so a state
-  // that says the same thing as the current one is a no-op unless an action left it busy.
+  // would detach the textarea and take the focus away from whoever is typing in it, and it would
+  // hand back enabled Approve/Reject/Send buttons while the request they already fired is still in
+  // flight — so a state that says the same thing as the current one is always a no-op. Only an
+  // owner's setBusy(false) releases a pending action.
   setState(state) {
     const next = state && typeof state === "object" ? state : { kind: "loading" };
     const key = stateKey(next);
-    if (this.mode === "thread" && !this.busy && key === this.stateKey) return;
+    if (key === this.stateKey) return;
+    const previous = this.state.kind;
     this.state = { ...next, kind: next.kind ?? "loading" };
     this.stateKey = key;
     this.busy = false;
     this.draw();
+    if (this.mode === "thread" && this.state.kind !== previous && ANNOUNCEMENT[this.state.kind]) {
+      toast(ANNOUNCEMENT[this.state.kind]);
+    }
   }
 
   // Rebuild the current surface: the caller's `datasets()` or question text changed under it.
   refresh() {
     this.draw();
+  }
+
+  // The project's datasets arrive after the page does. Only the chip row is rebuilt: redrawing the
+  // whole surface would detach the textarea and drop the caret of whoever is already typing.
+  setDatasets() {
+    replace(this.datasets, this.datasetChips());
   }
 
   setBusy(busy) {
@@ -163,13 +185,13 @@ export class Composer {
       replace(this.node, this.pausedBar(), this.error);
       return;
     }
-    if (kind === "answer") {
-      const number = this.state.question?.question_number;
-      const field = this.state.question?.field;
+    if (kind === "answer" && this.state.question) {
+      const number = this.state.question.question_number;
+      const field = this.state.question.field;
       replace(
         this.context,
         h("span", { class: "eyebrow" }, ["Question", number ? ` ${number}` : "", field ? ` · ${field}` : ""].join("")),
-        h("p", { class: "question" }, this.state.question?.text ?? ""),
+        h("p", { class: "question" }, this.state.question.text ?? ""),
       );
     }
     this.field.disabled = !this.fieldEnabled();
@@ -192,7 +214,9 @@ export class Composer {
     if (this.state.kind === "working") {
       const stage = String(this.state.stage ?? "").toLowerCase();
       if (stage === "auditing") return "MIRA is auditing…";
-      return stage ? `THY is working · ${this.state.stage}` : "THY is working…";
+      // The same display label the transcript's working row and the header stepper use: the wire
+      // stage never reaches the operator twice in two spellings.
+      return stage ? `THY is working · ${stageLabel(stage)}` : "THY is working…";
     }
     return PLACEHOLDER[this.state.kind] ?? "";
   }

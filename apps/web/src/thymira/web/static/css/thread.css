@@ -310,7 +310,12 @@
   color: var(--text-3);
 }
 
+/* The inner <pre> also matches .code, which draws its own border and radius: without
+   this the block shows a doubled edge and notched inner corners. .code itself is left
+   alone - a standalone pre.code in a tool detail or a review card wants that border. */
 .code-block pre {
+  border: 0;
+  border-radius: 0;
   max-height: 420px;
   overflow: auto;
   padding: var(--s-3);
@@ -347,6 +352,28 @@
   flex: 1;
   height: 1px;
   background: var(--border);
+}
+
+/* An answer taken from context.md: a note, not a structural marker like
+   .stage-divider. */
+.quiet-note {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding-block: var(--s-2);
+  color: var(--text-3);
+  font-size: var(--text-small);
+}
+
+/* The collapsed "Structured output" disclosure on a model turn. */
+.structured > summary {
+  color: var(--text-3);
+  font-size: var(--text-small);
+  cursor: pointer;
+}
+
+.structured[open] > summary {
+  margin-bottom: var(--s-2);
 }
 
 .agent-summary {
@@ -607,7 +634,9 @@
 
 .outcome-card {
   margin-top: var(--s-3);
-  background: linear-gradient(var(--tone-soft), transparent 70%), var(--surface);
+  background:
+    linear-gradient(color-mix(in srgb, var(--tone) 14%, transparent), transparent 70%),
+    var(--surface);
 }
 
 .outcome-card .outcome-head {
@@ -639,12 +668,17 @@
   background: var(--thy);
 }
 
+/* Sticky, not absolute: an absolutely positioned child of the scroller is laid out in
+   the scrolled content and rides away with it - exactly when the operator has
+   scrolled up and needs it. As the scroller's last flow child it sticks to the bottom
+   of the scrollport instead. */
 .scroll-pill {
-  position: absolute;
-  left: 50%;
+  position: sticky;
   bottom: var(--s-4);
   z-index: 6;
-  display: inline-flex;
+  display: flex;
+  width: max-content;
+  margin: -34px auto 0;
   align-items: center;
   gap: 6px;
   padding: 6px 13px;
@@ -655,7 +689,6 @@
   font-size: var(--text-small);
   font-weight: 500;
   box-shadow: var(--shadow-2);
-  transform: translateX(-50%);
 }
 
 .scroll-pill:hover {

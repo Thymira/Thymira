@@ -97,7 +97,7 @@ export class SettingsView {
         section(
           "Appearance",
           "System follows the operating system. Motion follows it too: with reduced motion on, every animation here stops.",
-          h("div", { class: "filter-pills", role: "group", "aria-label": "Theme" }, this.themePills),
+          h("div", { class: "pill-group", role: "group", "aria-label": "Theme" }, this.themePills),
         ),
         section(
           "Connection",

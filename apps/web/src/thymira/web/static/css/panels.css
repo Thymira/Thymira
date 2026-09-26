@@ -81,7 +81,7 @@
   border: 1px solid var(--border);
   border-left: 3px solid var(--tone);
   border-radius: var(--r-2);
-  background: var(--tone-soft);
+  background: color-mix(in srgb, var(--tone) 14%, transparent);
 }
 
 .callout-head {
@@ -646,6 +646,14 @@
 
 .settings h1 {
   font-size: 22px;
+}
+
+/* The settings groups are not the sidebar's filter strip: no indent, no hidden
+   scroller. */
+.pill-group {
+  display: flex;
+  gap: var(--s-1);
+  flex-wrap: wrap;
 }
 
 .settings-section {

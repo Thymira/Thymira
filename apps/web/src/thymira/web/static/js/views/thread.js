@@ -34,6 +34,7 @@ const RUN_RECORD_EVENTS = new Set([
   "audit.finding",
 ]);
 const UPDATE_DELAY_MS = 400;
+const INTERVIEW_RETRY_MS = 3000;
 
 // RunOutcome → stepper tone; undefined while the Run has not reached a terminal outcome.
 function outcomeTone(state) {
@@ -66,8 +67,15 @@ export class ThreadView {
     this.lastSeq = -1;
     this.disposed = false;
     this.catchingUp = false;
+    this.catchUpAgain = false;
     this.runRecordStale = false;
     this.updateTimer = null;
+    this.interviewTimer = null;
+    this.headKey = null;
+    this.stepKey = null;
+    this.stepperNode = null;
+    this.idNode = null;
+    this.eventCount = h("span");
     this.interviewCache = null;
     this.composerToken = 0;
     this.controller = new AbortController();
@@ -103,6 +111,7 @@ export class ThreadView {
     this.inspector = new Inspector(inspectorRoot, {
       onClose: () => this.hooks.onInspectorChange?.(null),
       onPanelChange: (next) => this.hooks.onInspectorChange?.(next),
+      onOverlay: (open) => this.hooks.onInspectorOverlay?.(open),
       onWidth: (px) => writePref("inspectorWidth", px),
     });
     if (this.panel) this.inspector.open(this.panel, this.item);
@@ -114,6 +123,7 @@ export class ThreadView {
     this.disposed = true;
     this.controller.abort();
     clearTimeout(this.updateTimer);
+    clearTimeout(this.interviewTimer);
     this.inspector.close();
   }
 
@@ -164,8 +174,15 @@ export class ThreadView {
   }
 
   async catchUp() {
-    if (this.catchingUp) return;
+    // A gap reported while a read is in flight cannot be dropped: the stream already moved its
+    // cursor past that event and will not send it again. Remember the request and repeat the read.
+    if (this.catchingUp) {
+      this.catchUpAgain = true;
+      return;
+    }
     this.catchingUp = true;
+    this.catchUpAgain = false;
+    const before = this.lastSeq;
     try {
       const events = await readAllEvents(this.runId, { afterSeq: this.lastSeq, signal: this.controller.signal });
       for (const event of events) this.accept(event);
@@ -174,6 +191,11 @@ export class ThreadView {
     } finally {
       this.catchingUp = false;
     }
+    const again = this.catchUpAgain;
+    this.catchUpAgain = false;
+    // Only while the log is still making progress: a read that returned nothing new would repeat
+    // for ever against an event the API cannot yet serve.
+    if (again && !this.disposed && this.lastSeq > before) await this.catchUp();
   }
 
   async applyUpdate() {
@@ -237,6 +259,9 @@ export class ThreadView {
 
   // ---------------------------------------------------------------- actions
 
+  // Resolves to null when the action succeeded and to the error message when it did not, so a
+  // surface that disabled its own controls (the transcript's review card) can put them back
+  // instead of sitting on "Recording the approval…" for ever.
   async mutate(action, done) {
     this.actionStatus.textContent = "Working…";
     this.actionStatus.className = "action-status";
@@ -246,18 +271,21 @@ export class ThreadView {
       this.actionStatus.textContent = done;
       toast(done, { tone: "ok" });
       await this.onRunMutated(run);
+      return null;
     } catch (error) {
       const message = `${error?.code ?? "error"}: ${error?.message ?? error}`;
       this.actionStatus.textContent = message;
       this.actionStatus.className = "action-status tone-block";
       this.composer.setError(message);
+      return message;
+    } finally {
       this.composer.setBusy(false);
     }
   }
 
   decide(approved, note) {
     const text = String(note ?? "").trim();
-    this.mutate(
+    return this.mutate(
       () => (approved ? api.approve(this.runId, text) : api.reject(this.runId, text)),
       approved ? "Approved." : "Rejected.",
     );
@@ -361,6 +389,22 @@ export class ThreadView {
     this.inspectorToggle.setAttribute("aria-pressed", String(this.inspector.isOpen));
     if (attention) this.inspectorToggle.dataset.attention = "true";
     else delete this.inspectorToggle.dataset.attention;
+    // The event count is the only part of the header that changes on every batch, so it lives in
+    // its own node and the rest is rebuilt only when it actually says something different.
+    replace(this.eventCount, this.eventsLoaded ? `${integer(this.events.length)} events` : "reading the log…");
+    const stepKey = `${this.eventsLoaded}|${stageStepIndex(state)}|${outcomeTone(state) ?? ""}`;
+    if (stepKey !== this.stepKey) {
+      this.stepKey = stepKey;
+      this.stepperNode = this.eventsLoaded
+        ? stepper(stageSteps(), stageStepIndex(state), outcomeTone(state))
+        : null;
+    }
+    if (!this.idNode) this.idNode = copyable(run.id);
+    // Rebuilding the header on every batch restarts the current step's pulse, throws away the
+    // "Copied" confirmation and takes the focus off whatever action the operator is on.
+    const headKey = [stepKey, run.status, active, resumable, prompt, run.error ?? "", run.created_at].join("|");
+    if (headKey === this.headKey) return;
+    this.headKey = headKey;
     replace(
       this.head,
       h(
@@ -393,9 +437,9 @@ export class ThreadView {
       h(
         "div",
         { class: "thread-head-meta" },
-        this.eventsLoaded ? stepper(stageSteps(), stageStepIndex(state), outcomeTone(state)) : null,
-        copyable(run.id),
-        h("span", null, this.eventsLoaded ? `${integer(this.events.length)} events` : "reading the log…"),
+        this.stepperNode,
+        this.idNode,
+        this.eventCount,
         h("span", null, timestamp(run.created_at)),
       ),
       run.error ? notice(run.error, "block") : null,
@@ -455,7 +499,20 @@ export class ThreadView {
             },
           });
         })
-        .catch(() => {});
+        .catch((error) => {
+          // No event arrives while the Run waits for information, so nothing would call this
+          // again: a disabled "THY is working" composer would be the operator's dead end. Say the
+          // Run is waiting, name the failure, and read the question again shortly.
+          if (this.disposed || token !== this.composerToken) return;
+          this.composer.setState({ kind: "answer", question: null });
+          this.composer.setError(
+            `${error?.code ?? "error"}: ${error?.message ?? error} · the thread is waiting for you; retrying`,
+          );
+          clearTimeout(this.interviewTimer);
+          this.interviewTimer = setTimeout(() => {
+            if (!this.disposed) this.renderComposer();
+          }, INTERVIEW_RETRY_MS);
+        });
       return;
     }
     const approvals = foldApprovals(this.events);

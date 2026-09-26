@@ -63,6 +63,7 @@ export class Inspector {
     this.item = null;
     this._panel = DEFAULT_PANEL;
     this._open = false;
+    this._scrollKey = null;
     this.tabs = new Map();
     this.badges = new Map();
 
@@ -140,6 +141,7 @@ export class Inspector {
     this._open = true;
     this.root.hidden = false;
     if (this.shell) this.shell.dataset.inspector = "open";
+    this.options.onOverlay?.(true);
     this.markTabs();
     if (changed) this.renderPanel();
   }
@@ -150,6 +152,7 @@ export class Inspector {
     this.current = null;
     this.root.hidden = true;
     if (this.shell) this.shell.dataset.inspector = "closed";
+    this.options.onOverlay?.(false);
   }
 
   toggle() {
@@ -163,8 +166,14 @@ export class Inspector {
 
   markTabs() {
     for (const [panel, tab] of this.tabs) {
-      if (panel === this._panel) tab.setAttribute("aria-current", "page");
-      else tab.removeAttribute("aria-current");
+      if (panel === this._panel) {
+        tab.setAttribute("aria-current", "page");
+        // Eleven tabs do not fit the panel: the current one is scrolled into the strip, so the
+        // operator is never left looking at a strip that says Details while Interview is open.
+        tab.scrollIntoView({ inline: "nearest", block: "nearest" });
+      } else {
+        tab.removeAttribute("aria-current");
+      }
     }
   }
 
@@ -209,7 +218,17 @@ export class Inspector {
     const entry = PANEL_TABLE[this._panel] ?? PANEL_TABLE[DEFAULT_PANEL];
     const result = entry.render({ ...this.ctx, item: this.item });
     this.current = result instanceof Node ? { node: result } : result;
+    // A live panel is rebuilt on every 400 ms batch. Sending it back to the top each time would
+    // make Tools or Agents unreadable while a Run works, so the scroll only resets when the
+    // operator actually asked for a different panel or a different entry.
+    const key = `${this._panel}:${this.item ?? ""}`;
+    const top = this.body.scrollTop;
     replace(this.body, this.stale, this.current.node);
+    if (key === this._scrollKey) {
+      this.body.scrollTop = top;
+      return;
+    }
+    this._scrollKey = key;
     this.body.scrollTop = 0;
   }
 
@@ -230,8 +249,13 @@ export class Inspector {
     const startX = event.clientX;
     const startWidth = this.width();
     this.handle.setPointerCapture?.(event.pointerId);
+    // The column animates its width over 260 ms, which is right for opening and collapsing and
+    // wrong under a pointer: the edge would trail the cursor and the next move would read a
+    // mid-transition width. The drag suppresses the transition and tracks its own width.
+    this.shell?.setAttribute("data-resizing", "");
     const move = (moved) => this.applyWidth(startWidth + (startX - moved.clientX));
     const stop = () => {
+      this.shell?.removeAttribute("data-resizing");
       this.handle.removeEventListener("pointermove", move);
       this.handle.removeEventListener("pointerup", stop);
       this.handle.removeEventListener("pointercancel", stop);

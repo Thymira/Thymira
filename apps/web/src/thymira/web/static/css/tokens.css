@@ -21,7 +21,9 @@
   /* ---------------------------------------------------------------- text (light) */
   --text: #1b1a17;
   --text-2: #5b5850;
-  --text-3: #8b877c;
+  /* 5.3:1 on --surface and 4.6:1 on --surface-2: .muted, .eyebrow and every
+     placeholder are 11-12.5px text, so they carry the 4.5:1 minimum. */
+  --text-3: #6f6b61;
 
   /* ---------------------------------------------------------------- accents (light) */
   --thy: #d9531e;
@@ -29,7 +31,9 @@
 
   /* ---------------------------------------------------------------- state (light) */
   --ok: #1f8a4c;
-  --caution: #4f9d5f;
+  /* A WARNING tag paints --caution on a 14% tint of itself; the lighter green read
+     at 2.9:1 against that chip. */
+  --caution: #2f7a42;
   --warn: #b3701a;
   --review: #2f6fde;
   --active: #0e8a94;
@@ -54,8 +58,11 @@
   --thy-line: color-mix(in srgb, var(--thy) 34%, transparent);
   --mira-soft: color-mix(in srgb, var(--mira) 12%, transparent);
   --mira-line: color-mix(in srgb, var(--mira) 34%, transparent);
+  /* --tone only. A soft tint cannot live here: a custom property that references
+     another is substituted on the element that declares it, so a tint declared on
+     :root computes once against this default and inherits that grey past every
+     .tone-* class. Each consumer mixes var(--tone) at its own use site instead. */
   --tone: var(--text-3);
-  --tone-soft: color-mix(in srgb, var(--tone) 14%, transparent);
   --ring: color-mix(in srgb, var(--thy) 24%, transparent);
   --hover: color-mix(in srgb, var(--text) 5%, transparent);
   --press: color-mix(in srgb, var(--text) 9%, transparent);
@@ -123,7 +130,7 @@
 
   --text: #eceae4;
   --text-2: #b1ada3;
-  --text-3: #7d7970;
+  --text-3: #8f8b81;
 
   --thy: #ff7a45;
   --mira: #4cc9cc;
@@ -161,7 +168,7 @@
 
     --text: #eceae4;
     --text-2: #b1ada3;
-    --text-3: #7d7970;
+    --text-3: #8f8b81;
 
     --thy: #ff7a45;
     --mira: #4cc9cc;

@@ -288,7 +288,8 @@ export function confirmDialog({ title, body, confirmLabel = "Confirm", cancelLab
     dialog.addEventListener("close", onClose);
     replace(dialog, form);
     dialog.showModal();
-    confirm.focus();
+    // A destructive confirmation opens on the safe choice: a stray Enter must not cancel a thread.
+    (danger ? cancel : confirm).focus();
   });
 }
 
