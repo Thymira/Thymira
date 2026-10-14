@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
+from thymira.core.risk_profile_records import CLARIFIABLE_RISK_FIELDS
 from thymira.schemas import (
     RunCondition,
     RunOutcome,
@@ -282,6 +283,60 @@ def apply_transition(state: RunProjection, command: RunTransitionCommand) -> Run
             f"{state.stage}/{state.condition}"
         )
     next_state = _next_state(state, command.kind)
+    return RunTransitionResult(
+        state=next_state,
+        event=RunTransitionEvent(
+            event_type="run.transitioned",
+            run_id=state.run_id,
+            command=command.kind,
+            from_version=state.version,
+            to_version=next_state.version,
+            previous_state=state.state,
+            state=next_state.state,
+        ),
+    )
+
+
+def apply_risk_clarification_transition(
+    state: RunProjection,
+    command: RunTransitionCommand,
+    *,
+    field: str,
+    supersedes_decision_id: str,
+    question_event_id: str,
+) -> RunTransitionResult:
+    """Replace a planning approval park with an information park for one risk fact.
+
+    This narrow state transition is used only after the Gate boundary validates the exact
+    unresolved review and event-backed question. The ordinary ``apply_transition`` deliberately
+    continues to reject ``WAIT_FOR_INFORMATION`` from every waiting state.
+    """
+    if command.expected_version != state.version:
+        raise StaleRunVersionError(
+            f"run {state.run_id}: expected version {command.expected_version}, current version "
+            f"is {state.version}"
+        )
+    if command.kind is not RunTransitionKind.WAIT_FOR_INFORMATION:
+        raise InvalidRunTransitionError("risk clarification must use wait_for_information")
+    if (
+        state.stage is not RunStage.PLANNING
+        or state.condition is not RunCondition.WAITING
+        or state.wait_reason is not WaitReason.APPROVAL
+    ):
+        raise InvalidRunTransitionError("risk clarification requires a planning approval wait")
+    if (
+        field not in CLARIFIABLE_RISK_FIELDS
+        or not isinstance(supersedes_decision_id, str)
+        or not supersedes_decision_id.strip()
+        or not isinstance(question_event_id, str)
+        or not question_event_id.strip()
+    ):
+        raise InvalidRunTransitionError("risk clarification requires a bounded question marker")
+    next_state = _copy_state(
+        state,
+        condition=RunCondition.WAITING,
+        wait_reason=WaitReason.INFORMATION,
+    )
     return RunTransitionResult(
         state=next_state,
         event=RunTransitionEvent(

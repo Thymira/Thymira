@@ -18,6 +18,12 @@ from thymira.core.control_plane import (
     RunController,
     RunEventLog,
 )
+from thymira.core.conversations import (
+    ConversationBusyError,
+    ConversationConflictError,
+    ConversationHistoryError,
+    ConversationWorkspace,
+)
 from thymira.core.decisions import (
     AnalyticalAnswer,
     AutomaticResolver,
@@ -105,6 +111,7 @@ from thymira.core.phases import (
     next_phase,
     phase_precedes,
 )
+from thymira.core.project_files import ProjectFileError, list_project_files, read_project_file
 from thymira.core.project_inputs import (
     ContextDocument,
     DatasetUpload,
@@ -204,6 +211,10 @@ __all__ = [
     "ControlHandler",
     "ControlInputConsumer",
     "ControlPlaneResult",
+    "ConversationBusyError",
+    "ConversationConflictError",
+    "ConversationHistoryError",
+    "ConversationWorkspace",
     "DatasetUpload",
     "DatasetUploadResult",
     "DecisionMode",
@@ -241,6 +252,7 @@ __all__ = [
     "PendingRiskQuestion",
     "Phase",
     "PlanReviewRequiredError",
+    "ProjectFileError",
     "ProjectInputConflictError",
     "ProjectInputError",
     "ProjectInputNotFoundError",
@@ -323,11 +335,13 @@ __all__ = [
     "initial_graph_state",
     "initial_run_state",
     "initial_runtime_state",
+    "list_project_files",
     "load_project_config",
     "next_phase",
     "notification_from_bytes",
     "notification_to_bytes",
     "phase_precedes",
+    "read_project_file",
     "resolve_run_model_route_policy",
     "rework_signal_from_decision",
     "serialize_runtime_state",

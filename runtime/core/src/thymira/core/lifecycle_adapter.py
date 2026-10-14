@@ -10,10 +10,11 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
-from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, NoReturn, Protocol, cast, runtime_checkable
 
 from thymira.agents.settlement import finalize_parked_invocation
 from thymira.core.control_plane import RunController, RunEventLog
+from thymira.core.dispatch import schedule_stopped_checkpoint
 from thymira.core.graph.state import initial_runtime_state
 from thymira.core.lifecycle_worker import (
     ControlInputConsumer,
@@ -23,8 +24,14 @@ from thymira.core.lifecycle_worker import (
     WorkExecutor,
 )
 from thymira.core.run_state import RunTransitionKind
+from thymira.core.runtime_identity import (
+    RuntimeIdentity,
+    process_runtime_identity,
+    runtime_attachment_payload,
+)
 from thymira.schemas import (
     Actor,
+    EventSurface,
     EventType,
     ExecutionOutcomeKind,
     FailureCause,
@@ -36,12 +43,17 @@ from thymira.schemas import (
 from thymira.state import LifecycleError, RunHandle
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import Callable, Iterator, Sequence
 
     from langchain_core.runnables import RunnableConfig
+    from pydantic import BaseModel
 
     from thymira.core.dispatch import GraphFactory
     from thymira.state import LifecycleRepository, LocalRunStore
+
+
+def _raise_missing_started_event(run_id: str) -> NoReturn:
+    raise LifecycleError(f"run {run_id} has no hash-chained initial run.started event")
 
 
 class LiveOwnerContext:
@@ -94,11 +106,18 @@ class LifecycleGraphExecutor:
         run_store: LocalRunStore,
         graph_factory: GraphFactory,
         owner_context: LiveOwnerContext,
+        *,
+        runtime_identity: RuntimeIdentity | None = None,
+        runtime_schemas: Sequence[type[BaseModel]] | None = None,
     ) -> None:
         self._repository = repository
         self._run_store = run_store
         self._graph_factory = graph_factory
         self._owner_context = owner_context
+        self._runtime_identity = (
+            process_runtime_identity() if runtime_identity is None else runtime_identity
+        )
+        self._runtime_schemas = runtime_schemas
 
     def execute(self, work: WorkItem, live_owner: RunHandle) -> WorkResult:
         """Execute one claimed work item while every graph write sees the live owner."""
@@ -109,10 +128,41 @@ class LifecycleGraphExecutor:
         try:
             with self._owner_context.bind(live_owner):
                 graph = self._graph_factory(run)
+                started = next(
+                    (
+                        event
+                        for event in self._run_store.events(run.id)
+                        if event.type is EventType.RUN_STARTED
+                    ),
+                    None,
+                )
+                if started is None or started.hash is None:
+                    _raise_missing_started_event(run.id)
+                live_owner.append(
+                    EventType.RUNTIME_ATTACHED,
+                    Actor.system(),
+                    runtime_attachment_payload(
+                        self._runtime_identity,
+                        schemas=self._runtime_schemas,
+                        run_started_seq=started.seq,
+                        run_started_hash=started.hash,
+                    ),
+                    subject_id=run.id,
+                    producer="thymira.core",
+                    producer_version="0.1",
+                    correlation_id=self._runtime_identity.generation_id,
+                    surface=EventSurface.LOG_ONLY,
+                )
                 config = cast("RunnableConfig", {"configurable": {"thread_id": run.id}})
                 if work.kind == "run.execute":
                     graph.invoke(initial_runtime_state(run), config, durability="sync")
                 elif work.kind == "control.apply":
+                    schedule_stopped_checkpoint(
+                        graph,
+                        config,
+                        run.id,
+                        self._run_store.events(run.id),
+                    )
                     graph.invoke(None, config, durability="sync")
         except Exception as exc:  # noqa: BLE001  # graph boundary records every ordinary failure
             cause = FailureCause(

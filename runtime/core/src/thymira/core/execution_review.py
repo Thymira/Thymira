@@ -28,6 +28,8 @@ if TYPE_CHECKING:
 
 
 EXECUTION_START_RESUME_TARGET = "execution_start"
+PLAN_RESUME_TARGET = "plan"
+"""Resume an exactly approved plan candidate at the existing execution-gate anchor."""
 
 INTERVIEW_LIMIT_RESUME_TARGET = "interview_limit"
 """The park target of the bounded risk interview's question-limit review.
@@ -50,7 +52,12 @@ than the Gate's outgoing edge, for the same reason.
 """
 
 _KNOWN_RESUME_TARGETS = frozenset(
-    {EXECUTION_START_RESUME_TARGET, INTERVIEW_LIMIT_RESUME_TARGET, RISK_UNCERTAINTY_RESUME_TARGET}
+    {
+        EXECUTION_START_RESUME_TARGET,
+        PLAN_RESUME_TARGET,
+        INTERVIEW_LIMIT_RESUME_TARGET,
+        RISK_UNCERTAINTY_RESUME_TARGET,
+    }
 )
 """Every target a park may persist; anything else is a corrupted or forward-dated log."""
 
@@ -61,6 +68,15 @@ def execution_gate_state(
     gate: Callable[[RuntimeState, SubgraphDeps], RuntimeState],
 ) -> RuntimeState:
     """Reuse a persisted start review after checkpoint lag, or evaluate the Gate once."""
+    if state.execution_decision is not None:
+        if (
+            state.execution_constraints is not None
+            and state.execution_constraints != state.execution_decision.execution_constraints
+        ):
+            raise ValueError("runtime execution constraints no longer match their Gate decision")
+        return state.model_copy(
+            update={"execution_constraints": state.execution_decision.execution_constraints}
+        )
     persisted = persisted_execution_start_decision(deps.event_log.events(), state.run_id)
     if persisted is None:
         return gate(state, deps)
@@ -278,6 +294,7 @@ def pending_review_decision(events: Sequence[Event], run_id: str) -> PolicyDecis
         and _closes_review(event)
         and (decision_id := approval_decision_id(event.payload)) is not None
     }
+    resolved.update(_superseded_review_ids(events))
     for event in reversed(events):
         if event.type is not EventType.POLICY_DECISION:
             continue
@@ -312,6 +329,7 @@ def _closes_review(event: Event) -> bool:
 
 def parked_review_decision(events: Sequence[Event], run_id: str) -> PolicyDecision | None:
     """Return the decision named by the Run's latest approval park transition."""
+    superseded = _superseded_review_ids(events)
     for event in reversed(events):
         if (
             event.type is not EventType.RUN_TRANSITIONED
@@ -321,6 +339,8 @@ def parked_review_decision(events: Sequence[Event], run_id: str) -> PolicyDecisi
         payload = event.payload.get("policy_decision")
         if not isinstance(payload, dict):
             return None
+        if payload.get("id") in superseded:
+            return None
         try:
             return PolicyDecision.model_validate(payload)
         except (TypeError, ValueError) as exc:
@@ -328,6 +348,18 @@ def parked_review_decision(events: Sequence[Event], run_id: str) -> PolicyDecisi
                 f"run {run_id}: transition event {event.event_id} names an invalid decision"
             ) from exc
     return None
+
+
+def _superseded_review_ids(events: Sequence[Event]) -> set[str]:
+    """Retire only reviews replaced by a committed controller clarification transition."""
+    return {
+        decision_id
+        for event in events
+        if event.type is EventType.RUN_TRANSITIONED
+        and event.payload.get("command") == "wait_for_information"
+        and event.payload.get("resume_from") == "risk_clarification"
+        and isinstance(decision_id := event.payload.get("supersedes_decision_id"), str)
+    }
 
 
 def persisted_execution_start_decision(

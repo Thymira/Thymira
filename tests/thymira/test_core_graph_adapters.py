@@ -164,6 +164,7 @@ class _ThyOutputStub:
     experiment_ids: tuple[str, ...] = ()
     artifact_ids: tuple[str, ...] = ()
     progress: ThyProgress | None = None
+    pending_plan_review: None = None
     usage: dict[str, int | float | None] = field(default_factory=dict)
 
 
@@ -191,6 +192,19 @@ _PLAN_PASSES = Policy(
     ),
 )
 TEST_ROUTE_POLICY = ModelRoutePolicy.from_routes(("test-model",), authority="code-owned-tests")
+
+_PLAN_BLOCKS = Policy(
+    name="plan-blocks",
+    version="1.0",
+    action_rules=(
+        ActionRule(
+            id="TEST-PLAN-BLOCK",
+            action_types=("plan.proposed",),
+            decision=Decision.BLOCK,
+            reason="test policy: proposed plan is prohibited",
+        ),
+    ),
+)
 
 
 @pytest.fixture(autouse=True)
@@ -310,13 +324,26 @@ def test_mira_preflight_escalates_repeated_risk_uncertainty_to_human_review(
     recorded_assessment = next(
         event for event in events if event.type is EventType.RISK_ASSESSMENT_RECORDED
     )
-    assert requested.payload["request_payload"] == {
+    request_payload = requested.payload["request_payload"]
+    assert {
         "activity_profile_id": profile.id,
         "activity_profile_version": profile.version,
         "max_attempts": MAX_RISK_UNCERTAINTY_ATTEMPTS,
         "reason": "risk_classification_uncertain",
         "risk_assessment_id": recorded_assessment.subject_id,
+    }.items() <= request_payload.items()
+    assert (
+        request_payload["assessment_justification"]
+        == recorded_assessment.payload["risk_assessment"]["justification"]
+    )
+    assert request_payload["missing_information"] == ["risk_classification"]
+    assert request_payload["known_facts"]["decision_effect"] == profile.decision_effect
+    assert request_payload["clarification_rounds"] == {
+        "total": 0,
+        "max_total": 3,
+        "items": [],
     }
+    assert set(request_payload["decision_effects"]) == {"approve", "reject"}
     store.append(
         run.id,
         EventType.HUMAN_APPROVAL,
@@ -714,10 +741,11 @@ def _mira_agent_starts(events: list[Event]) -> list[Event]:
 # --------------------------------------------------------------------------- structure / identity
 
 
-def test_default_thy_catalog_carries_the_three_thy_agent_kinds() -> None:
+def test_default_thy_catalog_carries_training_and_separate_evaluation() -> None:
     catalog = default_thy_catalog()
 
-    assert set(catalog.names()) == {"data", "coding", "experiment"}
+    assert set(catalog.names()) == {"data", "coding", "experiment", "evaluation"}
+    assert catalog.get("evaluation").tool_allowlist == ("evaluate_model",)
     # Each spec keeps its resolved system prompt and output schema through the merge.
     for name in catalog.names():
         assert catalog.system_prompt(name)
@@ -779,11 +807,11 @@ def test_thy_subgraph_drives_a_real_thy_graph_and_preserves_identity(tmp_path: P
 
 
 def test_thy_subgraph_raises_when_thy_reports_an_error(tmp_path: Path) -> None:
-    """The default policy escalates ``plan.proposed`` to a human, so THY halts with an error."""
+    """An explicit plan prohibition remains a genuine THY error before Execute."""
     run = _run()
     execute_entries: list[str] = []
     deps = replace(
-        _subgraph_deps(run, tmp_path, policy=load_policy_stack()),
+        _subgraph_deps(run, tmp_path, policy=load_policy_stack().merged_with(_PLAN_BLOCKS)),
         before_thy_execute=lambda: execute_entries.append(run.id),
     )
     thy = ThySubgraph(
@@ -796,6 +824,12 @@ def test_thy_subgraph_raises_when_thy_reports_an_error(tmp_path: Path) -> None:
         thy.invoke(initial_runtime_state(run), deps=deps)
 
     assert execute_entries == []
+    assert any(
+        event.type is EventType.POLICY_DECISION
+        and event.payload.get("rule_id") == "TEST-PLAN-BLOCK"
+        and event.payload.get("decision") == Decision.BLOCK.value
+        for event in deps.event_log.events()
+    )
 
 
 def test_thy_subgraph_threads_real_tools_when_a_workspace_is_configured(
@@ -2092,7 +2126,7 @@ def test_production_factory_records_execute_before_missing_deliverable_failure(
 
 @pytest.mark.integration
 def test_production_factory_thy_failure_leaves_a_consistent_failed_run(tmp_path: Path) -> None:
-    """The default policy halts THY's plan; the composed Run becomes a verifiable FAILED Run."""
+    """An explicit plan prohibition leaves the composed Run verifiably FAILED in PLANNING."""
     workspace = _workspace(tmp_path)
     catalog = _data_agent_catalog(tmp_path / "catalog")
     provider = ScriptedProvider([_PLAN_OUTPUT])
@@ -2102,7 +2136,10 @@ def test_production_factory_thy_failure_leaves_a_consistent_failed_run(tmp_path:
         deps = dependency_ref[0]
         return build_runtime_graph_factory(
             deps.run_store,
-            gate_factory=deps.gate_factory,
+            gate_factory=lambda run_id: Gate(
+                PolicyEngine(load_policy_stack().merged_with(_PLAN_BLOCKS)),
+                RunEventLog(deps.run_store, run_id),
+            ),
             artifact_store_factory=deps.artifact_store_factory,
             tool_manager=deps.tool_manager,
             record_repository=deps.record_repository,
@@ -2134,6 +2171,12 @@ def test_production_factory_thy_failure_leaves_a_consistent_failed_run(tmp_path:
 
     assert final.status == "FAILED"
     assert RunController(deps.run_store).current_state(run.id).stage is RunStage.PLANNING
+    assert any(
+        event.type is EventType.POLICY_DECISION
+        and event.payload.get("rule_id") == "TEST-PLAN-BLOCK"
+        and event.payload.get("decision") == Decision.BLOCK.value
+        for event in events
+    )
     assert verify_events(events).valid
     failed = next(event for event in events if event.type is EventType.RUN_FAILED)
     assert "inline execution failed" in (failed.payload.get("error") or "")
@@ -2164,7 +2207,7 @@ def test_a_failed_dataset_intake_leaves_a_consistent_failed_run_not_a_zombie(
     """A missing declared dataset halts THY at Inspect -- and the composed Run still ends FAILED.
 
     Mirrors `test_production_factory_thy_failure_leaves_a_consistent_failed_run`: there, THY
-    halts because the default policy escalates `plan.proposed`; here it halts earlier, at
+    halts because an explicit policy blocks `plan.proposed`; here it halts earlier, at
     Inspect, because `.thymira/config.yaml` declares a dataset that is not on disk. Either way
     `InlineDispatcher` converts the raised `ThyExecutionError` into a recorded `RUN_FAILED` --
     proving a failed intake is a failed Run, never a zombie with no terminal event.
@@ -2516,7 +2559,8 @@ def test_thy_adapter_records_its_real_tool_budget_refusal(tmp_path: Path) -> Non
         }
     )
 
-    thy.invoke(state, deps=deps)
+    with pytest.raises(ThyExecutionError, match="tool-call budget exhausted"):
+        thy.invoke(state, deps=deps)
 
     events = deps.event_log.events()
     denial = next(event for event in events if event.type is EventType.TOOL_DENIED)
@@ -2728,11 +2772,17 @@ def test_the_usage_ledger_survives_the_parks_a_tool_review_causes(tmp_path: Path
     denied = [event for event in events if event.type is EventType.TOOL_DENIED]
     assert denied[-1].payload["decision_id"] == budget.payload["id"]
     assert "tool-call budget exhausted" in denied[-1].payload["reason"]
-    # The recorded evidence says the same: the snapshot the findings Gate saw carries every pass.
-    priced = [
-        event
-        for event in events
-        if event.type is EventType.HUMAN_APPROVAL_REQUESTED and "cost_so_far" in event.payload
+    # The denied second call is terminal; no findings review may turn it into success. The
+    # canonical request ledger still retains every pass through the two human-review parks.
+    assert deps.run_service.get_run(run.id).status.value == "FAILED"
+    failure = next(event for event in events if event.type is EventType.RUN_FAILED)
+    assert "tool-call budget exhausted" in failure.payload["error"]
+    assert denied[-1].seq < failure.seq
+    assert not any(
+        event.type is EventType.AUDIT_STARTED and event.seq > denied[-1].seq for event in events
+    )
+    recorded_requests = [
+        event for event in events if event.type is EventType.MODEL_REQUEST_RECORDED
     ]
-    assert priced[-1].payload["cost_so_far"]["requests"] == _requests(ledger.snapshot())
+    assert len(recorded_requests) == _requests(ledger.snapshot())
     assert verify_events(events).valid

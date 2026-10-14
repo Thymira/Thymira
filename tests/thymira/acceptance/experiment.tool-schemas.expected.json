@@ -242,7 +242,7 @@
   }
  },
  {
-  "description": "Execute Python code in a fresh interpreter through the runtime-configured sandbox with a bounded timeout. Nothing persists between calls: write files for anything the next call needs. Non-zero exits are reported as \"[exit code: N]\"; check that marker on every result and investigate a failure before moving on. Declare files created by the code in output_artifacts to publish their raw bytes, including binary .joblib and .png files; do not use read_file for binary outputs. Long output is truncated to its tail. A sandbox or policy refusal means execution is not permitted; do not retry another way.",
+  "description": "Execute Python code in a fresh interpreter through the runtime-configured sandbox with a bounded timeout. Syntax is checked before approval, and Python source is limited to 100000 UTF-8 bytes. Nothing persists between calls: write files for anything the next call needs. Non-zero exits are reported as \"[exit code: N]\"; check that marker on every result and investigate a failure before moving on. Declare files created by the code in output_artifacts, or write a fresh output_manifest_path JSON list inside the script for data-dependent outputs. This publishes raw bytes, including .joblib and .png files; do not use read_file for binary outputs. Long output is truncated to its tail. A sandbox or policy refusal means execution is not permitted; do not retry another way.",
   "name": "run_python",
   "parameters_json_schema": {
    "$defs": {
@@ -263,7 +263,7 @@
     },
     "RunPythonOutputArtifact": {
      "additionalProperties": false,
-     "description": "A raw file produced by ``run_python`` and published to the artifact store.",
+     "description": "A raw file produced or explicitly reused by ``run_python``.",
      "properties": {
       "kind": {
        "$ref": "#/$defs/ArtifactKind",
@@ -285,6 +285,19 @@
        "minLength": 1,
        "title": "Path",
        "type": "string"
+      },
+      "reuse_artifact_id": {
+       "anyOf": [
+        {
+         "minLength": 1,
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Reuse Artifact Id"
       }
      },
      "required": [
@@ -295,12 +308,22 @@
     }
    },
    "additionalProperties": false,
-   "description": "Validated arguments for run_python.",
+   "description": "Validated arguments for inline Python or one registered source artifact.",
    "properties": {
     "code": {
-     "minLength": 1,
-     "title": "Code",
-     "type": "string"
+     "anyOf": [
+      {
+       "maxLength": 100000,
+       "minLength": 1,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Inline source; provide exactly one of code or source_artifact_id.",
+     "title": "Code"
     },
     "description": {
      "description": "Clear, concise description of what this call does in active voice, 5-10 words (shown in the UI and recorded as evidence). Examples: \"Profile missing values per column\"; \"Train the logistic-regression baseline\"; \"Write the feature-engineering script\".",
@@ -318,6 +341,35 @@
      "title": "Output Artifacts",
      "type": "array"
     },
+    "output_manifest_path": {
+     "anyOf": [
+      {
+       "maxLength": 512,
+       "minLength": 1,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Fresh workspace-relative JSON path written by the script: an array of output descriptors. Use instead of output_artifacts for data-dependent outputs.",
+     "title": "Output Manifest Path"
+    },
+    "source_artifact_id": {
+     "anyOf": [
+      {
+       "minLength": 1,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "description": "Active .py code artifact ID returned by write_file; use instead of code.",
+     "title": "Source Artifact Id"
+    },
     "timeout_s": {
      "default": 30.0,
      "exclusiveMinimum": 0,
@@ -327,7 +379,6 @@
     }
    },
    "required": [
-    "code",
     "description"
    ],
    "title": "RunPythonArguments",

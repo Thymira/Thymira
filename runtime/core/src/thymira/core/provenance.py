@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import Field
 
+from thymira.core.runtime_identity import RuntimeIdentity, RuntimeObservation
 from thymira.events import canonical_json, sha256_text
 from thymira.schemas import ThymiraModel, utc_now
 
@@ -60,6 +61,8 @@ class RunEnvironment(ThymiraModel):
     captured_at: datetime = Field(default_factory=utc_now)
     runtime: RuntimeInfo
     source_control: SourceControl
+    runtime_identity: RuntimeIdentity | None = None
+    runtime_observation: RuntimeObservation | None = None
     inputs: dict[str, str | None] = Field(
         default_factory=dict, description="sha256 per named input (case, dataset, policy, …)"
     )
@@ -118,8 +121,10 @@ def capture_run_environment(
     cwd: Path,
     inputs: Mapping[str, str | None] | None = None,
     distributions: Sequence[str] = DEFAULT_DISTRIBUTIONS,
+    runtime_identity: RuntimeIdentity | None = None,
+    runtime_observation: RuntimeObservation | None = None,
 ) -> RunEnvironment:
-    """Capture interpreter, dependencies, git state and the given input hashes."""
+    """Capture interpreter, dependencies, Git state, runtime identity and input hashes."""
     return RunEnvironment(
         runtime=RuntimeInfo(
             python=platform.python_version(),
@@ -129,5 +134,7 @@ def capture_run_environment(
             dependencies=distribution_versions(distributions),
         ),
         source_control=source_control(Path(cwd)),
+        runtime_identity=runtime_identity,
+        runtime_observation=runtime_observation,
         inputs=dict(inputs or {}),
     )

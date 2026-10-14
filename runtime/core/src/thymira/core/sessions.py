@@ -65,6 +65,8 @@ class SessionService:
         *,
         project_id: Id,
         client: str,
+        title: str = "",
+        conversation: bool = False,
         model_route_policy: ModelRoutePolicy | None = None,
     ) -> Session:
         """Create and persist a new session for ``project_id`` and ``client``."""
@@ -72,6 +74,8 @@ class SessionService:
             id=new_id("session"),
             project_id=project_id,
             client=client,
+            title=title,
+            conversation=conversation,
             model_route_policy=self._caller_policy(model_route_policy),
         )
         return self._repository.save(session)
@@ -103,12 +107,16 @@ class SessionService:
         *,
         project_id: Id,
         client: str,
+        title: str = "",
+        conversation: bool = False,
         model_route_policy: ModelRoutePolicy | None = None,
     ) -> Session:
         """Compatibility alias for :meth:`create_session`."""
         return self.create_session(
             project_id=project_id,
             client=client,
+            title=title,
+            conversation=conversation,
             model_route_policy=model_route_policy,
         )
 
@@ -120,11 +128,19 @@ class SessionService:
         self,
         *,
         project_id: Id | None = None,
+        conversation: bool | None = None,
         limit: int = 50,
         cursor: str | None = None,
     ) -> Page[Session]:
         """List sessions through the repository pagination contract."""
-        return self._repository.list(project_id=project_id, limit=limit, cursor=cursor)
+        if conversation is None:
+            return self._repository.list(project_id=project_id, limit=limit, cursor=cursor)
+        return self._repository.list(
+            project_id=project_id,
+            conversation=conversation,
+            limit=limit,
+            cursor=cursor,
+        )
 
     def resolve(
         self,
@@ -173,6 +189,14 @@ class SessionService:
         if run_id in session.run_ids:
             return session
         updated = session.model_copy(update={"run_ids": (*session.run_ids, run_id)})
+        return self._repository.save(updated)
+
+    def set_title_if_empty(self, session_id: Id, title: str) -> Session:
+        """Set a Session's initial title without replacing its other persisted fields."""
+        session = self.get_session(session_id)
+        if session.title:
+            return session
+        updated = session.model_copy(update={"title": title[:200]})
         return self._repository.save(updated)
 
     def with_run(self, session: Session, run_id: Id) -> Session:

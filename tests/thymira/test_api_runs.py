@@ -512,6 +512,34 @@ def test_human_decision_routes_resolve_a_waiting_run(
 
 
 @pytest.mark.parametrize("endpoint", ["approve", "reject"])
+def test_review_answer_is_bound_to_the_decision_the_user_saw(tmp_path: Path, endpoint: str) -> None:
+    """A stale chat card cannot answer a different pending decision."""
+    client, _, _ = _client(tmp_path, execution_review=True)
+    run_id, _ = _park_for_execution_start_approval(client)
+    deps = cast("FastAPI", client.app).state.runtime_deps
+    before = deps.run_store.events(run_id)
+    decision_id = next(
+        event.payload["policy_decision"]["id"]
+        for event in reversed(before)
+        if event.type is EventType.RUN_TRANSITIONED
+        and event.payload.get("command") == "wait_for_approval"
+    )
+    stale = client.post(
+        f"/runs/{run_id}/{endpoint}",
+        json={"expected_decision_id": new_id("decision"), "note": "A different review"},
+    )
+    assert stale.status_code == 409, stale.text
+    assert stale.json()["code"] == "approval_changed"
+    assert deps.run_store.events(run_id) == before
+    exact = client.post(
+        f"/runs/{run_id}/{endpoint}",
+        json={"expected_decision_id": decision_id, "note": "Reviewed the displayed scope"},
+    )
+    assert exact.status_code == 202, exact.text
+    assert _human_approval_event(client, run_id).payload["decision_id"] == decision_id
+
+
+@pytest.mark.parametrize("endpoint", ["approve", "reject"])
 def test_execution_start_decision_routes_apply_a_declared_human_answer(
     tmp_path: Path, endpoint: str
 ) -> None:

@@ -2,24 +2,32 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
 
 from thymira.core.execution_review import (
     INTERVIEW_LIMIT_RESUME_TARGET,
+    PLAN_RESUME_TARGET,
     RISK_UNCERTAINTY_RESUME_TARGET,
 )
 from thymira.core.graph.state import initial_runtime_state
+from thymira.core.runtime_identity import (
+    RuntimeIdentity,
+    process_runtime_identity,
+    runtime_attachment_payload,
+)
 from thymira.observability import run_trace
-from thymira.schemas import EventType, Id, Run
+from thymira.schemas import Actor, EventSurface, EventType, Id, Run
 
 if TYPE_CHECKING:
     from contextlib import AbstractContextManager
 
     from langchain_core.runnables import RunnableConfig
     from langgraph.graph.state import CompiledStateGraph
+    from pydantic import BaseModel
 
     from thymira.observability import Handle
+    from thymira.schemas import Event
     from thymira.state import LocalRunStore
 
 type GraphFactory = Callable[[Run], "CompiledStateGraph"]
@@ -50,6 +58,72 @@ class ExecutionDispatchError(RuntimeError):
     """Raised when an inline execution cannot complete its graph invocation."""
 
 
+def schedule_stopped_checkpoint(
+    graph: CompiledStateGraph,
+    config: RunnableConfig,
+    run_id: Id,
+    events: Sequence[Event],
+) -> None:
+    """Schedule the canonical continuation when a durable checkpoint has no next node."""
+    snapshot = graph.get_state(config)
+    if not snapshot.values:
+        raise ValueError(f"run {run_id}: no resumable checkpoint exists")
+    if not snapshot.next:
+        graph.update_state(config, {}, as_node=_resume_node_from_events(events))
+
+
+def _resume_node_from_events(events: Sequence[Event]) -> str:
+    """Select the stopped graph node from the latest canonical resume transition."""
+    for event in reversed(events):
+        if event.type is not EventType.RUN_TRANSITIONED:
+            continue
+        if event.payload.get("command") != "resume":
+            continue
+        resume_from = event.payload.get("resume_from")
+        if resume_from in {
+            "information",
+            INTERVIEW_LIMIT_RESUME_TARGET,
+            RISK_UNCERTAINTY_RESUME_TARGET,
+        }:
+            # These reviews re-enter the interview body before continuing to the Gate.
+            return "start"
+        if resume_from in {"execution", "execution_start", PLAN_RESUME_TARGET}:
+            # A plan review re-enters the existing execution-gate anchor to seed its approved plan.
+            return "execution_gate"
+        return "gate"
+    return "gate"
+
+
+def _append_runtime_attachment(
+    store: LocalRunStore,
+    run: Run,
+    identity: RuntimeIdentity,
+    schemas: Sequence[type[BaseModel]] | None,
+) -> None:
+    """Record which process generation actually entered this Run's graph."""
+    events = store.events(run.id)
+    started = next((event for event in events if event.type is EventType.RUN_STARTED), None)
+    if started is None or started.hash is None:
+        raise ValueError(f"run {run.id} has no hash-chained initial run.started event")
+    store.append(
+        run.id,
+        EventType.RUNTIME_ATTACHED,
+        Actor.system(),
+        runtime_attachment_payload(
+            identity,
+            schemas=schemas,
+            run_started_seq=started.seq,
+            run_started_hash=started.hash,
+        ),
+        expected_version=None,
+        subject_id=run.id,
+        producer="thymira.core",
+        producer_version="0.1",
+        correlation_id=identity.generation_id,
+        surface=EventSurface.LOG_ONLY,
+    )
+
+
 class InlineDispatcher:
     """Compile and invoke one Run's composition graph in the current process.
 
@@ -58,15 +132,29 @@ class InlineDispatcher:
     without changing the ``RunService`` call site.
     """
 
-    def __init__(self, store: LocalRunStore, graph_factory: GraphFactory) -> None:
+    def __init__(
+        self,
+        store: LocalRunStore,
+        graph_factory: GraphFactory,
+        *,
+        runtime_identity: RuntimeIdentity | None = None,
+        runtime_schemas: Sequence[type[BaseModel]] | None = None,
+    ) -> None:
         self._store = store
         self._graph_factory = graph_factory
+        self._runtime_identity = (
+            process_runtime_identity() if runtime_identity is None else runtime_identity
+        )
+        self._runtime_schemas = runtime_schemas
 
     def submit(self, run_id: Id) -> None:
         """Run the persisted graph synchronously and let it persist lifecycle evidence."""
         try:
             run = self._store.get(run_id)
             graph = self._graph_factory(run)
+            _append_runtime_attachment(
+                self._store, run, self._runtime_identity, self._runtime_schemas
+            )
             with _trace(run) as trace:
                 final = graph.invoke(
                     initial_runtime_state(run),
@@ -92,19 +180,14 @@ class InlineDispatcher:
         ``ThyExecutionError`` or any other failure used to propagate raw instead of becoming a
         recorded ``RUN_FAILED``, leaving the Run a zombie with no terminal event).
         """
-
-        def _require_resumable(*, has_values: bool) -> None:
-            if not has_values:
-                raise ValueError(f"run {run_id}: no resumable checkpoint exists")
-
         try:
             run = self._store.get(run_id)
             graph = self._graph_factory(run)
             config: RunnableConfig = {"configurable": {"thread_id": run.id}}
-            snapshot = graph.get_state(config)
-            _require_resumable(has_values=bool(snapshot.values))
-            if not snapshot.next:
-                graph.update_state(config, {}, as_node=self._resume_node(run_id))
+            schedule_stopped_checkpoint(graph, config, run_id, self._store.events(run_id))
+            _append_runtime_attachment(
+                self._store, run, self._runtime_identity, self._runtime_schemas
+            )
             with _trace(run, resumed=True) as trace:
                 final = graph.invoke(None, config, durability=_DURABILITY)
                 _record_outcome(trace, final)
@@ -117,33 +200,7 @@ class InlineDispatcher:
 
     def _resume_node(self, run_id: Id) -> str:
         """Select the stopped graph node from the recorded resume cause."""
-        for event in reversed(self._store.events(run_id)):
-            if event.type is not EventType.RUN_TRANSITIONED:
-                continue
-            if event.payload.get("command") != "resume":
-                continue
-            resume_from = event.payload.get("resume_from")
-            if resume_from in {
-                "information",
-                INTERVIEW_LIMIT_RESUME_TARGET,
-                RISK_UNCERTAINTY_RESUME_TARGET,
-            }:
-                # ``update_state(..., as_node=...)`` schedules that node's outgoing edge. Anchor
-                # at ``start`` so the interview body runs again and can ask the next missing fact.
-                # An approved question-limit review anchors there for the same reason: it re-enters
-                # the interview body, which now sees the resolved review and records it instead of
-                # asking again, so `route_after_interview` finds the Run active and moves on. An
-                # approved risk-uncertainty review anchors there too: the interview body is a no-op
-                # on an already-complete profile, and `preflight` runs again next, now finding its
-                # own review resolved instead of re-parking on the same unanswerable judgement.
-                return "start"
-            if resume_from in {"execution", "execution_start"}:
-                # A tool-call review re-enters the seeded THY pass; an execution-start review
-                # follows this node's outgoing edge with its preserved approved decision. In
-                # both cases the Gate body is skipped, so it cannot mint a replacement decision.
-                return "execution_gate"
-            return "gate"
-        return "gate"
+        return _resume_node_from_events(self._store.events(run_id))
 
 
 def _trace(run: Run, *, resumed: bool = False) -> AbstractContextManager[Handle]:

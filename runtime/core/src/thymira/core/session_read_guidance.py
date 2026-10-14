@@ -1,0 +1,25 @@
+"""Shared read-only lookup grammar and evidence interpretation guidance."""
+
+SESSION_READ_GUIDANCE = (
+    "Read-only evidence searches use only list_files, read_file, glob or grep in\n"
+    "the virtual roots project/... and runs/<actual-session-run-id>/... .\n"
+    "If supplied evidence does not name an existing Run file or locate it, use a read-only lookup\n"
+    "in that Run's virtual tree before saying the file is unavailable.\n"
+    "When the requested file extension is known, prefer glob over directory listings.\n"
+    "A glob path is literal; put\n"
+    "filename wildcard syntax only in pattern, never in path. Example glob: operation=glob, "
+    'path="runs/<run_id>/artifacts", pattern="*.png".\n'
+    "grep searches literal file contents only. Never use grep to search filenames or extensions; "
+    "use glob for filename patterns.\n"
+    "list_files lists only immediate children; a directory "
+    "listing never proves recursive absence.\n"
+    "Use returned offset and limit only to request later pages; a truncated page "
+    "or nonzero offset is\n"
+    "not a complete scan. Do not repeat an identical operation, path, pattern, "
+    "and offset after its\n"
+    "result is supplied. A later tool error cannot invalidate an earlier successful path. "
+    "Run failure\n"
+    "or missing required deliverables does not prove all files are absent. "
+    "Lookup evidence is read-only\n"
+    "and never authorizes new work or grants approval."
+)

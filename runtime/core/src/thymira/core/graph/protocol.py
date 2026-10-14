@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from thymira.core.graph.state import RuntimeState
     from thymira.core.usage import UsageLedger
     from thymira.events import EventLog
-    from thymira.policies import Gate
+    from thymira.policies import Gate, ToolCapability
     from thymira.schemas import DagBoard, Id, PlanBoard
     from thymira.state import ArtifactStore, BoardRepository, DagRepository, RecordRepository
     from thymira.tools import ToolManager
@@ -69,6 +69,9 @@ class SubgraphDeps:
     tool_manager: ToolManager
     record_repository: RecordRepository
     usage_ledger: UsageLedger
+    # MIRA's isolated audit tools are not executable THY/runtime capabilities.  Core passes their
+    # declared bounds separately so report review can recognize only authenticated local lookups.
+    audit_tool_capabilities: tuple[ToolCapability, ...] = ()
     # Real Core composition injects the owner-shared repositories.  The concrete empty defaults
     # exist only for direct subgraph tests that intentionally have no board evidence.
     plan_repository: BoardRepository = field(default_factory=_EmptyBoardRepository)

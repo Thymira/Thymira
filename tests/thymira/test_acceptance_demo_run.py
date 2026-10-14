@@ -390,9 +390,10 @@ def test_demo_run_records_what_the_model_saw_and_what_it_left_behind(
         for event in reversed(events)
         if event.type is EventType.AGENT_MESSAGE and event.payload.get("agent") == "experiment"
     )
-    reported = json.loads(str(final_message.payload["summary"]))
-    assert reported["metrics"] == {}
-    assert reported["model_artifact_id"] is None
+    assert final_message.payload["status"] == "FAILED"
+    assert final_message.payload["summary"] is None
+    assert final_message.payload["stop_reason"] == "failed"
+    assert "cannot enforce requested mode" in str(final_message.payload["text"]).casefold()
     assert not any(artifact.kind.value in {"metrics", "model"} for artifact in store.list_active())
 
     models = sorted(

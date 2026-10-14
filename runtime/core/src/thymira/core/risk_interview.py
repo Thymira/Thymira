@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from thymira.agents import RiskFacts, classify_risk
-from thymira.core.execution_review import INTERVIEW_LIMIT_RESUME_TARGET
+from thymira.agents import RiskFacts
+from thymira.core.risk_answer_publication import (
+    question_limit_after_rejected_answer,
+    retry_answer_publication,
+)
+from thymira.core.risk_answer_publication import (
+    recover_interrupted_answer as finish_interrupted_answer,
+)
+from thymira.core.risk_clarification import append_risk_question, clarify_recorded_field
+from thymira.core.risk_classification import classify_activity_risk
 from thymira.core.risk_interview_model import (
     RiskInterviewModelContext,
     SufficiencyJudgment,
@@ -19,24 +26,60 @@ from thymira.core.risk_interview_model import (
     judge_sufficiency,
     normalise,
 )
-from thymira.events import canonical_json
-from thymira.policies import RiskProfile
+from thymira.core.risk_profile_records import (
+    MAX_RISK_CLARIFICATION_QUESTIONS_PER_FIELD,
+    RiskInterviewError,
+    RiskInterviewNotPendingError,
+    append_profile_answer,
+    record_profile,
+    recorded_assessment,
+    recorded_profile,
+    updated_profile,
+)
+from thymira.core.risk_profile_records import (
+    field_question_count as _field_question_count,
+)
+from thymira.core.risk_question_records import (
+    PendingRiskQuestion,
+    prior_answered_question_context,
+)
+from thymira.core.risk_question_records import (
+    event_for_question as _event_for_question,
+)
+from thymira.core.risk_question_records import (
+    pending_risk_question as _pending_risk_question,
+)
+from thymira.core.risk_question_records import (
+    question_from_event as _question_from_event,
+)
+from thymira.core.risk_question_records import (
+    risk_uncertainty_marker as _risk_uncertainty_marker,
+)
+from thymira.core.risk_question_records import (
+    risk_uncertainty_scope as _risk_uncertainty_scope,
+)
+from thymira.core.risk_review_requests import (
+    ensure_question_wait,
+    interview_limit_answered,
+    interview_limit_approved,
+    interview_limit_decision,
+    request_interview_limit_review,
+)
+from thymira.core.risk_uncertainty_questions import (
+    MAX_RISK_UNCERTAINTY_QUESTIONS,
+    select_risk_uncertainty_question,
+    uncertainty_question_count,
+)
 from thymira.schemas import (
-    ActionIntent,
-    ActionKind,
     ActivityProfile,
     Actor,
-    ActorKind,
-    Decision,
     EventType,
-    Evidence,
     RiskAssessment,
-    approval_names_decision,
     new_id,
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable
 
     from thymira.agents.llm import LLMProvider
     from thymira.agents.llm.base import LLMResponse
@@ -44,7 +87,8 @@ if TYPE_CHECKING:
     from thymira.agents.request_ledger import RequestLedger
     from thymira.core.control_plane import MiraControlPlane
     from thymira.events import EventLog
-    from thymira.schemas import Event, ModelRoutePolicy, Run
+    from thymira.policies import RiskProfile
+    from thymira.schemas import ModelRoutePolicy, Run
     from thymira.state import LocalRunStore
 
 
@@ -73,7 +117,7 @@ plus the three downstream-context aliases the classifier prompt already presents
 MAX_INTERVIEW_QUESTIONS = 12
 """Bound repeated unanswered facts before escalating the Run to a human review."""
 
-MAX_INTERVIEW_QUESTIONS_PER_FIELD = 3
+MAX_INTERVIEW_QUESTIONS_PER_FIELD = MAX_RISK_CLARIFICATION_QUESTIONS_PER_FIELD
 """Bound repeated model-rejected human answers for one fact before review."""
 
 _QUESTIONS: dict[str, str] = {
@@ -98,29 +142,8 @@ _QUESTIONS: dict[str, str] = {
 }
 
 _NO_VALUE_MARKERS = frozenset({"none", "no", "ninguno", "ninguna", "ningun"})
-_MAX_REVIEW_SUMMARY = "Risk interview reached its question limit; human review is required."
 _CONTEXT_DOCUMENT_REF = ".thymira/context.md"
 _PROMPT_REF = "run.prompt"
-
-
-class RiskInterviewError(ValueError):
-    """Base error for an invalid activity-profile interview action."""
-
-
-class RiskInterviewNotPendingError(RiskInterviewError):
-    """Raised when a submitted answer does not target a current question."""
-
-
-@dataclass(frozen=True, slots=True)
-class PendingRiskQuestion:
-    """One event-backed question a caller may answer for the current profile."""
-
-    event_id: str
-    field: str
-    question: str
-    profile_id: str
-    profile_version: int
-    question_number: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,19 +153,6 @@ class RiskInterviewStatus:
     profile: ActivityProfile
     pending_question: PendingRiskQuestion | None
     requires_human_review: bool
-
-
-def _closes_review(event: Event) -> bool:
-    """Whether an approval event retires the bounded interview review request."""
-    if not isinstance(event.payload.get("approved"), bool):
-        return False
-    if event.actor.kind is ActorKind.SYSTEM:
-        return True
-    return (
-        event.actor.kind is ActorKind.HUMAN
-        and event.actor.authenticated
-        and ("automatic" not in event.payload or event.payload["automatic"] is False)
-    )
 
 
 class RiskInterviewService:
@@ -197,22 +207,30 @@ class RiskInterviewService:
         )
         if profile.version == 1 and self._question_count(run.id) == 0:
             profile = self._apply_context(run, profile, context_document, model_context)
-        missing = _missing_fields(profile)
-        if not missing:
-            return RiskInterviewStatus(profile, None, False)
-
-        pending = self._pending_question(run.id)
+        pending = self._pending_question(run.id, profile)
         if pending is not None:
             self._ensure_waiting_for_information(run.id, pending)
             return RiskInterviewStatus(profile, pending, False)
-        field = missing[0]
-        if (
-            self._question_count(run.id) >= self._max_questions
-            or _field_question_count(self._store.events(run.id), field)
-            >= MAX_INTERVIEW_QUESTIONS_PER_FIELD
+        if self._limit_review_resolved(run.id):
+            return RiskInterviewStatus(profile, None, False)
+        missing = _missing_fields(profile)
+        if question_limit_after_rejected_answer(
+            self._store.events(run.id), profile, max_questions=self._max_questions
+        ) or (
+            missing
+            and (
+                self._question_count(run.id) >= self._max_questions
+                or _field_question_count(self._store.events(run.id), missing[0])
+                >= MAX_INTERVIEW_QUESTIONS_PER_FIELD
+            )
         ):
             self._escalate_question_limit(run.id)
             return RiskInterviewStatus(profile, None, True)
+        if self._limit_review_pending(run.id):
+            return RiskInterviewStatus(profile, None, True)
+        if not missing:
+            return RiskInterviewStatus(profile, None, False)
+        field = missing[0]
 
         question, question_source = generate_question(
             field,
@@ -241,24 +259,69 @@ class RiskInterviewService:
             and _field_question_count(self._store.events(run.id), missing[0])
             >= MAX_INTERVIEW_QUESTIONS_PER_FIELD
         )
+        rejected_answer_limit = question_limit_after_rejected_answer(
+            self._store.events(run.id), profile, max_questions=self._max_questions
+        )
         return RiskInterviewStatus(
             profile,
             pending,
             pending is None
-            and bool(missing)
-            and (self._question_count(run.id) >= self._max_questions or field_limit_reached)
-            and not self._limit_review_answered(run.id),
+            and not self._limit_review_answered(run.id)
+            and (
+                self._limit_review_pending(run.id)
+                or rejected_answer_limit
+                or (
+                    bool(missing)
+                    and (self._question_count(run.id) >= self._max_questions or field_limit_reached)
+                )
+            ),
         )
 
     def has_pending_question(self, run_id: str) -> bool:
         """Return whether an unanswered fixed-field question exists for this Run.
 
-        `resume` uses this to tell the two producers of a `wait_reason: information` park apart:
-        this interview's own question (only `answer` may clear it) from MIRA preflight's
-        request for context on an uncertain inherent-risk judgement, which carries no question
-        event at all and so can never satisfy this check -- `resume` may re-attempt it instead.
+        `resume` uses this to distinguish an interview question, including a bounded question
+        created from MIRA's recorded uncertainty, from an information park that has no question
+        event. Only an answer tied to the current question event may clear the former.
         """
         return self._pending_question(run_id) is not None
+
+    def recover_answer_publication(self, run: Run) -> bool:
+        """Publish a durable answer's missing profile or follow-up before any plain resume."""
+        profile = self._recorded_profile(run.id)
+        if profile is None:
+            return False
+        question = self._pending_question(run.id, profile)
+        if question is None:
+            return False
+        event = next(
+            (
+                item
+                for item in self._store.events(run.id)
+                if item.type is EventType.ACTIVITY_PROFILE_QUESTIONED
+                and item.event_id == question.event_id
+            ),
+            None,
+        )
+        if event is None:
+            raise RiskInterviewNotPendingError("the pending question evidence is missing")
+        return finish_interrupted_answer(
+            self._store,
+            profile,
+            event,
+            max_questions=self._max_questions,
+            fixed_question=_QUESTIONS[question.field],
+            record_profile=self._record_profile,
+            append_follow_up=lambda answer_event, text: self._request_question(
+                run,
+                profile,
+                question.field,
+                text,
+                question_source="risk_answer_recovery",
+                follow_up_to_answer_event_id=answer_event.event_id,
+                risk_uncertainty=_risk_uncertainty_marker(event),
+            ),
+        )
 
     def current_profile(self, run: Run, initial_profile: ActivityProfile) -> ActivityProfile:
         """Return the latest profile or the supplied initial profile without recording either."""
@@ -272,6 +335,7 @@ class RiskInterviewService:
         *,
         answer: str,
         actor: Actor,
+        expected_question_id: str | None = None,
         provider: LLMProvider | None = None,
         event_log: EventLog | None = None,
         before_model_selection: Callable[[], None] | None = None,
@@ -289,10 +353,52 @@ class RiskInterviewService:
             raise RiskInterviewNotPendingError(
                 f"run {run.id!r} has no persisted activity profile to update"
             )
-        question = self._pending_question(run.id)
+        question = self._pending_question(run.id, profile)
+        recovered = retry_answer_publication(
+            self._store,
+            profile,
+            question_event_id=expected_question_id or (question.event_id if question else None),
+            answer=value,
+            actor=actor,
+            max_questions=self._max_questions,
+            fixed_questions=_QUESTIONS,
+            record_profile=self._record_profile,
+            append_follow_up=lambda question_event, answer_event, text: self._request_question(
+                run,
+                profile,
+                question_event.payload["field"],
+                text,
+                question_source="risk_answer_recovery",
+                follow_up_to_answer_event_id=answer_event.event_id,
+                risk_uncertainty=_risk_uncertainty_marker(question_event),
+            ),
+        )
+        if recovered is not None:
+            return recovered
         if question is None:
             message = f"run {run.id!r} has no pending risk-interview question"
             raise RiskInterviewNotPendingError(message)
+        if expected_question_id is not None and question.event_id != expected_question_id:
+            raise RiskInterviewNotPendingError(
+                f"run {run.id!r} pending question changed before the answer was submitted"
+            )
+        if (
+            isinstance(
+                next(
+                    (
+                        event.payload.get("risk_clarification")
+                        for event in self._store.events(run.id)
+                        if event.event_id == question.event_id
+                    ),
+                    None,
+                ),
+                dict,
+            )
+            and expected_question_id is None
+        ):
+            raise RiskInterviewNotPendingError(
+                "risk clarification answer must name its exact question event"
+            )
         if question.profile_id != profile.id or question.profile_version != profile.version:
             raise RiskInterviewNotPendingError(
                 f"run {run.id!r} question does not match its current activity profile"
@@ -315,6 +421,7 @@ class RiskInterviewService:
             INTERVIEW_FIELDS,
             profile,
             model_context,
+            current_request=run.conversation.requested_work if run.conversation else run.prompt,
         )
         if judgment is None:
             # Existing callers without a provider retain the original answer semantics. A human
@@ -327,7 +434,8 @@ class RiskInterviewService:
 
         if judgment.sufficient:
             profile_id = new_id("profile")
-            answer_event = self._append_answer(
+            answer_event = append_profile_answer(
+                self._store,
                 run,
                 field=question.field,
                 question=question.question,
@@ -341,11 +449,12 @@ class RiskInterviewService:
                 judgment=judgment,
                 judgment_source=judgment_source,
             )
-            updated = _updated_profile(profile, question.field, value, profile_id, answer_event)
+            updated = updated_profile(profile, question.field, value, profile_id, answer_event)
             self._record_profile(updated)
             return updated
 
-        answer_event = self._append_answer(
+        answer_event = append_profile_answer(
+            self._store,
             run,
             field=question.field,
             question=question.question,
@@ -359,12 +468,18 @@ class RiskInterviewService:
             judgment=judgment,
             judgment_source=judgment_source,
         )
+        events = self._store.events(run.id)
+        question_event = _event_for_question(events, question.event_id)
+        risk_uncertainty = _risk_uncertainty_marker(question_event)
         # The answered event closes the current question even though it does not revise the
         # profile. The follow-up question becomes the sole pending question.
         if (
             self._question_count(run.id) >= self._max_questions
-            or _field_question_count(self._store.events(run.id), question.field)
-            >= MAX_INTERVIEW_QUESTIONS_PER_FIELD
+            or _field_question_count(events, question.field) >= MAX_INTERVIEW_QUESTIONS_PER_FIELD
+            or (
+                risk_uncertainty is not None
+                and uncertainty_question_count(events) >= MAX_RISK_UNCERTAINTY_QUESTIONS
+            )
         ):
             return profile
         follow_up, question_source = generate_follow_up(
@@ -375,6 +490,8 @@ class RiskInterviewService:
             INTERVIEW_FIELDS,
             profile,
             model_context,
+            current_request=run.conversation.requested_work if run.conversation else run.prompt,
+            prior_question_answers=prior_answered_question_context(events, profile, question),
         )
         pending = self._request_question(
             run,
@@ -383,6 +500,7 @@ class RiskInterviewService:
             follow_up,
             question_source=question_source,
             follow_up_to_answer_event_id=answer_event.event_id,
+            risk_uncertainty=risk_uncertainty,
         )
         self._ensure_waiting_for_information(run.id, pending)
         return profile
@@ -452,8 +570,9 @@ class RiskInterviewService:
         missing = _missing_fields(profile)
         if not missing:
             return profile
-        sources = [_PROMPT_REF]
-        context = f"Run request:\n{run.prompt.strip()}"
+        sources = ["run.conversation.requested_work" if run.conversation else _PROMPT_REF]
+        request = run.conversation.requested_work if run.conversation else run.prompt
+        context = f"Run request:\n{request.strip()}"
         if context_document and context_document.strip():
             sources.append(_CONTEXT_DOCUMENT_REF)
             context += f"\n\nProject context ({_CONTEXT_DOCUMENT_REF}):\n{context_document.strip()}"
@@ -472,7 +591,8 @@ class RiskInterviewService:
             if fact is None:
                 continue
             profile_id = new_id("profile")
-            answer_event = self._append_answer(
+            answer_event = append_profile_answer(
+                self._store,
                 run,
                 field=field,
                 question=_QUESTIONS[field],
@@ -486,9 +606,126 @@ class RiskInterviewService:
                 judgment=SufficiencyJudgment(sufficient=True, reason=fact.reason),
                 judgment_source=source,
             )
-            profile = _updated_profile(profile, field, fact.value, profile_id, answer_event)
+            profile = updated_profile(profile, field, fact.value, profile_id, answer_event)
             self._record_profile(profile)
         return profile
+
+    def clarify_uncertainty(
+        self,
+        run: Run,
+        assessment: RiskAssessment,
+        model_context: RiskInterviewModelContext | None,
+    ) -> PendingRiskQuestion | None:
+        """Ask one model-selected question bound to an exact uncertain assessment and profile."""
+        profile = self._recorded_profile(run.id)
+        if profile is None:
+            raise RiskInterviewNotPendingError(
+                f"run {run.id!r} has no persisted activity profile to clarify"
+            )
+        if (
+            assessment.run_id != run.id
+            or assessment.activity_profile_id != profile.id
+            or assessment.activity_profile_version != profile.version
+        ):
+            raise RiskInterviewError("risk assessment does not match the current activity profile")
+        if self.latest_assessment(run.id, profile) != assessment:
+            raise RiskInterviewError("risk assessment is not recorded for the current profile")
+
+        events = self._store.events(run.id)
+        pending = self._pending_question(run.id, profile)
+        if pending is not None:
+            event = _event_for_question(events, pending.event_id)
+            if event is None:
+                raise RiskInterviewError("the pending question evidence is missing")
+            marker = _risk_uncertainty_marker(event)
+            scope = _risk_uncertainty_scope(assessment, profile)
+            if marker is not None and all(marker.get(key) == value for key, value in scope.items()):
+                self._ensure_waiting_for_information(run.id, pending)
+                return pending
+            return None
+
+        current = self._control_plane.controller.current_state(run.id).state
+        if current.condition.value == "waiting":
+            return None
+        if (
+            self._question_count(run.id) >= self._max_questions
+            or uncertainty_question_count(events) >= MAX_RISK_UNCERTAINTY_QUESTIONS
+        ):
+            return None
+
+        allowed_fields = tuple(
+            field
+            for field in INTERVIEW_FIELDS
+            if _field_question_count(events, field) < MAX_INTERVIEW_QUESTIONS_PER_FIELD
+        )
+        selection, source = select_risk_uncertainty_question(
+            run,
+            assessment,
+            profile,
+            events,
+            allowed_fields,
+            model_context,
+        )
+        if selection is None or selection.field is None or selection.question is None:
+            return None
+
+        marker = _risk_uncertainty_scope(assessment, profile)
+        marker["question_round"] = uncertainty_question_count(events) + 1
+        pending = self._request_question(
+            run,
+            profile,
+            selection.field,
+            selection.question,
+            question_source=f"risk_uncertainty_{source}",
+            risk_uncertainty=marker,
+        )
+        self._ensure_waiting_for_information(run.id, pending)
+        return pending
+
+    def clarify_field(
+        self,
+        run: Run,
+        *,
+        field: str,
+        expected_decision_id: str | None = None,
+        actor: Actor | None = None,
+        question_source: str = "risk_classification",
+        recorded_concern: str | None = None,
+    ) -> PendingRiskQuestion | None:
+        """Ask one bounded risk fact, or replace the exact parked risk review with its question."""
+        if field not in INTERVIEW_FIELDS:
+            raise RiskInterviewError(f"unknown activity-profile field {field!r}")
+        profile = self._recorded_profile(run.id)
+        if profile is None:
+            raise RiskInterviewNotPendingError(
+                f"run {run.id!r} has no persisted activity profile to clarify"
+            )
+
+        def ensure_waiting(question: PendingRiskQuestion) -> None:
+            self._ensure_waiting_for_information(run.id, question)
+
+        return clarify_recorded_field(
+            self._store,
+            self._control_plane,
+            run,
+            profile,
+            field=field,
+            fixed_question=_QUESTIONS[field],
+            recorded_concern=recorded_concern,
+            expected_decision_id=expected_decision_id,
+            actor=actor,
+            max_questions=self._max_questions,
+            pending_question=lambda: self._pending_question(run.id, profile),
+            request_question=lambda question: self._request_question(
+                run,
+                profile,
+                field,
+                question,
+                question_source=question_source,
+            ),
+            ensure_waiting=ensure_waiting,
+            question_from_event=_question_from_event,
+        )
 
     def _request_question(
         self,
@@ -499,113 +736,28 @@ class RiskInterviewService:
         *,
         question_source: str,
         follow_up_to_answer_event_id: str | None = None,
+        expected_decision_id: str | None = None,
+        risk_uncertainty: dict[str, str | int] | None = None,
     ) -> PendingRiskQuestion:
         """Append one policy-gated question event for a missing fixed field."""
         question_number = self._question_count(run.id) + 1
-        intent = ActionIntent(
-            id=new_id("intent"),
-            run_id=run.id,
-            requester=Actor.system(),
-            action_kind=ActionKind.REQUEST_INFORMATION,
-            subject_kind="run",
-            subject_id=run.id,
-            purpose=question,
-            payload={
-                "field": field,
-                "activity_profile_id": profile.id,
-                "activity_profile_version": profile.version,
-            },
-            idempotency_key=(
-                f"risk-interview:{run.id}:{profile.version}:{field}"
-                if follow_up_to_answer_event_id is None
-                else (
-                    f"risk-interview:{run.id}:{profile.version}:{field}:follow-up:"
-                    f"{follow_up_to_answer_event_id}"
-                )
-            ),
-        )
-        payload: dict[str, object] = {
-            "field": field,
-            "question": question,
-            "profile_id": profile.id,
-            "profile_version": profile.version,
-            "question_number": question_number,
-            "question_source": question_source,
-            "intent": intent.model_dump(mode="json"),
-        }
-        if follow_up_to_answer_event_id is not None:
-            payload["follow_up_to_answer_event_id"] = follow_up_to_answer_event_id
-        event = self._store.append(
-            run.id,
-            EventType.ACTIVITY_PROFILE_QUESTIONED,
-            Actor.system(),
-            payload,
-            expected_version=self._store.version(run.id),
-            subject_id=profile.id,
-            producer="thymira.core",
-            producer_version="0.1",
+        event = append_risk_question(
+            self._store,
+            run,
+            profile,
+            field,
+            question,
+            question_number=question_number,
+            question_source=question_source,
+            expected_decision_id=expected_decision_id,
+            follow_up_to_answer_event_id=follow_up_to_answer_event_id,
+            risk_uncertainty=risk_uncertainty,
         )
         return _question_from_event(event)
 
-    def _append_answer(
-        self,
-        run: Run,
-        *,
-        field: str,
-        question: str,
-        question_event_id: str | None,
-        answer: str,
-        actor: Actor,
-        profile_id: str,
-        profile_version: int,
-        answer_source: str,
-        source_ref: str | None,
-        judgment: SufficiencyJudgment,
-        judgment_source: str,
-    ) -> Event:
-        """Append one answer fact, whether it revises the profile or requests clarification."""
-        return self._store.append(
-            run.id,
-            EventType.ACTIVITY_PROFILE_ANSWERED,
-            actor,
-            {
-                "field": field,
-                "question": question,
-                "question_event_id": question_event_id,
-                "answer": answer,
-                "answered_by": actor.model_dump(mode="json"),
-                "answer_source": answer_source,
-                "source_ref": source_ref,
-                "sufficiency": judgment.model_dump(mode="json"),
-                "sufficiency_source": judgment_source,
-                "profile_id": profile_id,
-                "profile_version": profile_version,
-            },
-            expected_version=self._store.version(run.id),
-            subject_id=profile_id,
-            producer="thymira.core",
-            producer_version="0.1",
-        )
-
     def latest_assessment(self, run_id: str, profile: ActivityProfile) -> RiskAssessment | None:
-        """Return MIRA's persisted inherent-risk assessment for exactly this profile version."""
-        for event in reversed(self._store.events(run_id)):
-            if event.type is not EventType.RISK_ASSESSMENT_RECORDED:
-                continue
-            try:
-                assessment = RiskAssessment.model_validate_json(
-                    canonical_json(event.payload["risk_assessment"])
-                )
-            except (KeyError, TypeError, ValueError) as exc:
-                raise ValueError(
-                    f"run {run_id}: invalid risk_assessment.recorded event {event.event_id}"
-                ) from exc
-            if (
-                assessment.activity_profile_id == profile.id
-                and assessment.activity_profile_version == profile.version
-            ):
-                return assessment
-        return None
+        """Read the exact immutable assessment through the record projection seam."""
+        return recorded_assessment(self._store, run_id, profile)
 
     def classify(
         self,
@@ -622,35 +774,26 @@ class RiskInterviewService:
     ) -> RiskProfile:
         """Classify the current profile once, floored by its recorded MIRA assessment."""
         profile = self._profile(run, initial_profile)
-        existing = self._classification(run.id, profile)
-        if existing is not None:
-            return existing
-        assessment = self.latest_assessment(run.id, profile)
-        risk = classify_risk(
-            _risk_facts(profile),
-            provider,
-            event_log,
-            run_risk_assessment=assessment,
-            before_model_selection=before_model_selection,
-            before_model_call=before_model_call,
-            record_model_usage=record_model_usage,
-            route_policy=route_policy,
-            request_ledger=request_ledger,
+        return classify_activity_risk(
+            run,
+            profile,
+            _risk_facts(
+                profile,
+                requested_work=run.conversation.requested_work if run.conversation else run.prompt,
+            ),
+            RiskInterviewModelContext(
+                provider=provider,
+                event_log=event_log,
+                before_model_selection=before_model_selection,
+                before_model_call=before_model_call,
+                record_model_usage=record_model_usage,
+                route_policy=route_policy,
+                request_ledger=request_ledger,
+            ),
+            self._store,
+            self._control_plane,
+            max_questions=self._max_questions,
         )
-        event_log.append(
-            EventType.RISK_CLASSIFIED,
-            Actor.system(),
-            {
-                "risk_profile": risk.model_dump(mode="json"),
-                "activity_profile_id": profile.id,
-                "activity_profile_version": profile.version,
-                "mira_risk_assessment_id": assessment.id if assessment is not None else None,
-            },
-            subject_id=profile.id,
-            producer="thymira.core",
-            producer_version="0.1",
-        )
-        return risk
 
     def _profile(self, run: Run, initial_profile: ActivityProfile) -> ActivityProfile:
         """Load the latest persisted version or record the supplied initial immutable profile."""
@@ -663,53 +806,23 @@ class RiskInterviewService:
         return initial_profile
 
     def _recorded_profile(self, run_id: str) -> ActivityProfile | None:
-        """Return the latest validated activity-profile record without creating one."""
-        for event in reversed(self._store.events(run_id)):
-            if event.type is not EventType.ACTIVITY_PROFILE_RECORDED:
-                continue
-            try:
-                profile = ActivityProfile.model_validate_json(
-                    canonical_json(event.payload["activity_profile"])
-                )
-            except (KeyError, TypeError, ValueError) as exc:
-                raise ValueError(
-                    f"run {run_id}: invalid activity_profile.recorded event {event.event_id}"
-                ) from exc
-            if profile.run_id != run_id:
-                raise ValueError(
-                    f"run {run_id}: activity profile {profile.id} belongs to another Run"
-                )
-            return profile
-        return None
+        """Delegate the immutable event-record operation."""
+        return recorded_profile(self._store, run_id)
 
     def _record_profile(self, profile: ActivityProfile) -> None:
-        """Append the exact immutable profile that subsequent evidence refers to."""
-        assert profile.run_id is not None  # noqa: S101  # validated by ActivityProfile.
-        self._store.append(
-            profile.run_id,
-            EventType.ACTIVITY_PROFILE_RECORDED,
-            Actor.system(),
-            {"activity_profile": profile.model_dump(mode="json")},
-            expected_version=self._store.version(profile.run_id),
-            subject_id=profile.id,
-            producer="thymira.core",
-            producer_version="0.1",
-        )
+        """Delegate the immutable event-record operation."""
+        return record_profile(self._store, profile)
 
-    def _pending_question(self, run_id: str) -> PendingRiskQuestion | None:
-        """Fold question and answer events into the last unanswered question."""
-        answered = {
-            event.payload.get("question_event_id")
-            for event in self._store.events(run_id)
-            if event.type is EventType.ACTIVITY_PROFILE_ANSWERED
-        }
-        for event in reversed(self._store.events(run_id)):
-            if (
-                event.type is EventType.ACTIVITY_PROFILE_QUESTIONED
-                and event.event_id not in answered
-            ):
-                return _question_from_event(event)
-        return None
+    def _pending_question(
+        self, run_id: str, profile: ActivityProfile | None = None
+    ) -> PendingRiskQuestion | None:
+        """Project the pending event only while the bounded review is not already waiting."""
+        return _pending_risk_question(
+            self._store.events(run_id),
+            profile or self._recorded_profile(run_id),
+            max_questions=self._max_questions,
+            limit_review_pending=self._limit_review_pending(run_id),
+        )
 
     def _question_count(self, run_id: str) -> int:
         """Return the durable number of questions already asked for one Run."""
@@ -719,67 +832,16 @@ class RiskInterviewService:
         )
 
     def _ensure_waiting_for_information(self, run_id: str, question: PendingRiskQuestion) -> None:
-        """Ask the policy-gated control plane to park the Run for this question."""
-        current = self._control_plane.controller.current_state(run_id)
-        if current.condition.value == "waiting" and current.wait_reason is not None:
-            if current.wait_reason.value == "information":
-                return
-            raise RiskInterviewError(f"run {run_id!r} is waiting for {current.wait_reason.value}")
-        event = next(
-            (item for item in self._store.events(run_id) if item.event_id == question.event_id),
-            None,
-        )
-        if event is None:
-            raise RiskInterviewError(f"run {run_id!r} question evidence is missing")
-        try:
-            intent = ActionIntent.model_validate(event.payload["intent"])
-        except (KeyError, TypeError, ValueError) as exc:
-            raise RiskInterviewError(f"run {run_id!r} question intent is invalid") from exc
-        result = self._control_plane.handle(intent)
-        if result.state is None or result.state.wait_reason is None:
-            raise RiskInterviewError("the information request was not authorized to park the Run")
-        if result.state.wait_reason.value != "information":
-            raise RiskInterviewError("the information request parked the Run for the wrong reason")
+        """Publish the question's existing policy-gated information wait."""
+        ensure_question_wait(self._store, self._control_plane, run_id, question.event_id)
 
     def _escalate_question_limit(self, run_id: str) -> None:
-        """Request human review once the bounded interview cannot establish the required facts.
-
-        The park names :data:`INTERVIEW_LIMIT_RESUME_TARGET` so the approval re-enters the
-        interview body. Found live in `run_5a9e9662d6ce4527bc1c250bf6b5b9fd`: a target-less park
-        made `RunService.resolve_approval` record `resume_from: approval`, which
-        `InlineDispatcher._resume_node` maps to the Gate -- and the Gate's outgoing edge demands
-        a policy decision this Run never reached, so the approved Run died with
-        `runtime graph Gate node did not produce a policy decision` and the answer was spent for
-        nothing.
-        """
-        if self._limit_review_resolved(run_id):
+        """Publish one review at the interview resume target, preserving its decision details."""
+        if self._limit_review_resolved(run_id) or self._limit_review_pending(run_id):
             return
-        if self._limit_review_pending(run_id):
-            return
-        intent = ActionIntent(
-            id=new_id("intent"),
-            run_id=run_id,
-            requester=Actor.system(),
-            action_kind=ActionKind.REQUEST_APPROVAL,
-            subject_kind="run",
-            subject_id=run_id,
-            purpose=_MAX_REVIEW_SUMMARY,
-            payload={
-                "max_questions": self._max_questions,
-                "max_questions_per_field": MAX_INTERVIEW_QUESTIONS_PER_FIELD,
-                "reason": "missing_activity_profile",
-            },
-            idempotency_key=f"risk-interview-limit:{run_id}:{self._max_questions}",
+        request_interview_limit_review(
+            self._store, self._control_plane, run_id, max_questions=self._max_questions
         )
-        result = self._control_plane.handle(intent)
-        if result.decision.decision is not Decision.REQUIRE_HUMAN_REVIEW:
-            raise RiskInterviewError("question-limit escalation did not require human review")
-        if result.state is None:
-            self._control_plane.controller.park_for_review(
-                run_id,
-                result.decision,
-                resume_from=INTERVIEW_LIMIT_RESUME_TARGET,
-            )
 
     def _limit_review_pending(self, run_id: str) -> bool:
         """Return whether this interview already requested but has not received the limit review."""
@@ -789,60 +851,16 @@ class RiskInterviewService:
         return not self._limit_review_answered(run_id)
 
     def _limit_review_answered(self, run_id: str) -> bool:
-        """Return whether a human answer retired the bounded interview review request."""
-        requested = self._limit_review_decision_id(run_id)
-        if requested is None:
-            return False
-        return any(
-            event.type is EventType.HUMAN_APPROVAL
-            and approval_names_decision(event.payload, requested)
-            and _closes_review(event)
-            for event in self._store.events(run_id)
-        )
+        """Whether an authenticated answer or recorded system resolution retired the review."""
+        return interview_limit_answered(self._store.events(run_id))
 
     def _limit_review_resolved(self, run_id: str) -> bool:
-        """Return whether a human has answered the bounded interview's review request."""
-        requested = self._limit_review_decision_id(run_id)
-        if requested is None:
-            return False
-        return any(
-            event.type is EventType.HUMAN_APPROVAL
-            and approval_names_decision(event.payload, requested)
-            and event.payload.get("approved") is True
-            and ("automatic" not in event.payload or event.payload["automatic"] is False)
-            and event.actor.kind is ActorKind.HUMAN
-            and event.actor.authenticated
-            for event in self._store.events(run_id)
-        )
+        """Whether an authenticated human approved the exact bounded interview review."""
+        return interview_limit_approved(self._store.events(run_id))
 
     def _limit_review_decision_id(self, run_id: str) -> str | None:
-        """Find the decision id created for the one bounded-interview review request."""
-        for event in reversed(self._store.events(run_id)):
-            if event.type is not EventType.HUMAN_APPROVAL_REQUESTED:
-                continue
-            if event.payload.get("summary") != _MAX_REVIEW_SUMMARY:
-                continue
-            decision_id = event.payload.get("decision_id")
-            return decision_id if isinstance(decision_id, str) else None
-        return None
-
-    def _classification(self, run_id: str, profile: ActivityProfile) -> RiskProfile | None:
-        """Return an already-recorded classification for the exact immutable profile."""
-        for event in reversed(self._store.events(run_id)):
-            if event.type is not EventType.RISK_CLASSIFIED:
-                continue
-            if (
-                event.payload.get("activity_profile_id") != profile.id
-                or event.payload.get("activity_profile_version") != profile.version
-            ):
-                continue
-            try:
-                return RiskProfile.model_validate(event.payload["risk_profile"])
-            except (KeyError, TypeError, ValueError) as exc:
-                raise ValueError(
-                    f"run {run_id}: invalid risk.classified event {event.event_id}"
-                ) from exc
-        return None
+        """Find the exact bounded-interview decision in the persisted record."""
+        return interview_limit_decision(self._store.events(run_id))
 
 
 def _missing_fields(profile: ActivityProfile) -> tuple[str, ...]:
@@ -855,84 +873,7 @@ def _missing_fields(profile: ActivityProfile) -> tuple[str, ...]:
     return tuple(missing)
 
 
-def _field_question_count(events: Sequence[Event], field: str) -> int:
-    """Return how many durable interview questions targeted one fixed field."""
-    return sum(
-        event.type is EventType.ACTIVITY_PROFILE_QUESTIONED and event.payload.get("field") == field
-        for event in events
-    )
-
-
-def _question_from_event(event: Event) -> PendingRiskQuestion:
-    """Validate one persisted question event before exposing it to a caller."""
-    payload = event.payload
-    field = payload.get("field")
-    question = payload.get("question")
-    profile_id = payload.get("profile_id")
-    profile_version = payload.get("profile_version")
-    question_number = payload.get("question_number")
-    if (
-        not isinstance(field, str)
-        or field not in INTERVIEW_FIELDS
-        or not isinstance(question, str)
-        or not question
-        or not isinstance(profile_id, str)
-        or not profile_id
-        or not isinstance(profile_version, int)
-        or isinstance(profile_version, bool)
-        or profile_version < 1
-        or not isinstance(question_number, int)
-        or isinstance(question_number, bool)
-        or question_number < 1
-    ):
-        raise RiskInterviewError(f"risk-interview question event {event.event_id} is invalid")
-    return PendingRiskQuestion(
-        event_id=event.event_id,
-        field=field,
-        question=question,
-        profile_id=profile_id,
-        profile_version=profile_version,
-        question_number=question_number,
-    )
-
-
-def _updated_profile(
-    profile: ActivityProfile,
-    field: str,
-    answer: str,
-    profile_id: str,
-    answer_event: Event,
-) -> ActivityProfile:
-    """Return the next immutable profile version anchored to the answer event."""
-    if field not in INTERVIEW_FIELDS:
-        raise RiskInterviewError(f"unknown activity-profile field {field!r}")
-    value: str | tuple[str, ...]
-    if field in {"data_categories", "sensitive_attributes", "potential_consequences"}:
-        value = _split_values(answer)
-    else:
-        value = answer
-    evidence = Evidence(kind="event", ref=f"seq:{answer_event.seq}", sha256=answer_event.hash)
-    data = profile.model_dump(mode="python")
-    data.update(
-        {
-            "id": profile_id,
-            "version": profile.version + 1,
-            "supersedes_id": profile.id,
-            "evidence_refs": (*profile.evidence_refs, evidence),
-            field: value,
-        }
-    )
-    return ActivityProfile.model_validate(data)
-
-
-def _split_values(answer: str) -> tuple[str, ...]:
-    """Preserve a declared absence or split a plain list without inventing categories."""
-    if normalise(answer) in _NO_VALUE_MARKERS:
-        return ()
-    return tuple(part.strip() for part in re.split(r"[,;\n]", answer) if part.strip())
-
-
-def _risk_facts(profile: ActivityProfile) -> RiskFacts:
+def _risk_facts(profile: ActivityProfile, *, requested_work: str | None = None) -> RiskFacts:
     """Extract only declared activity-profile facts for the deterministic classifier layer."""
     population = normalise(profile.affected_population)
     no_person_impact = population in _NO_VALUE_MARKERS
@@ -952,18 +893,26 @@ def _risk_facts(profile: ActivityProfile) -> RiskFacts:
         if has_declared_value(value)
     )
     return RiskFacts(
-        objective=profile.purpose,
+        objective=requested_work or profile.purpose,
         has_sensitive_attributes=has_sensitive_attributes,
         affects_natural_persons=not no_person_impact,
         missing_required_information=_missing_fields(profile),
         present_context_fields=present_context,
         answerable_fields=ANSWERABLE_RISK_FIELDS,
         declared_context=tuple(
-            (name, value)
+            (name, value if isinstance(value, str) else "; ".join(value) or "none")
             for name, value in (
+                ("intended_use", profile.purpose),
+                ("affected_population", profile.affected_population),
                 ("decision_effect", profile.decision_effect),
+                ("decision_role", profile.decision_effect),
                 ("autonomy", profile.autonomy),
+                ("deployment_context", profile.autonomy),
                 ("human_oversight", profile.human_oversight),
+                ("jurisdiction", profile.jurisdiction),
+                ("data_categories", profile.data_categories),
+                ("sensitive_attributes", profile.sensitive_attributes),
+                ("potential_consequences", profile.potential_consequences),
             )
             if has_declared_value(value)
         ),

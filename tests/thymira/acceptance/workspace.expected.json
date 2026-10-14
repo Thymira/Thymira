@@ -1,6 +1,12 @@
 {
   "artifacts": [
     {
+      "kind": "report",
+      "name": "analysis.md",
+      "sha256": "<verified-at-runtime>",
+      "size_bytes": "<verified-at-runtime>"
+    },
+    {
       "kind": "dataset",
       "name": "datasets/german_credit.csv",
       "sha256": "e28da99f8e65a6cad1146b0cfdbe77778f805b7ffa5b4aadf621145e224b127d",
@@ -29,8 +35,8 @@
     "files": [
       {
         "path": ".thymira/config.yaml",
-        "sha256": "629071b80a64042f9fbac0de0632def3d9181ef3e13b118ab372a2738a1df6f4",
-        "size": 366
+        "sha256": "0eba07033db86500548a5765b22a56948f83435efc386a7d0ebb09f0e8f69953",
+        "size": 353
       },
       {
         "path": ".thymira/context.md",

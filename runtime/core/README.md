@@ -54,6 +54,96 @@ methods continue the task after dependencies are reconstructed from disk. Start 
 waives other restrictions or supplies a tool ticket. The pending start summary discloses these
 separate reviews. The default demo A18/A19/A23 outcomes are unchanged.
 
+Plan review parks separately in PLANNING. Its approval request stores the exact normalized plan
+and binding metadata; Core validates the matching manual answer and current scope before resuming
+that candidate. Checkpoint recovery does not replan or replace the approved decision. Inline and
+owner-bound lifecycle continuations retain their existing transition and persistence authority.
+
+Persistent Session conversations use `ConversationWorkspace` to create sequential Run-backed turns.
+The Run stores the scrubbed user message, ordinal, client retry key and selected prior Run IDs;
+conversation detail reconstructs assistant text only from verified `conversation.response` events
+covered by an authorized terminal completion and its exact audit snapshot. THY records those events
+as provisional before MIRA; blocked, pending or otherwise unauthorised text never enters the
+transcript or follow-up prompt. Approved review resume records the same audit/decision binding as
+ordinary completion and uses the canonical exact-subject human approval check.
+No second copy of the Run transcript is introduced. Run publication is serialized per Session and
+uses the existing staged Run publication path; retries return the linked Run, and pending
+publications are recovered only for that Session before retry lookup. A recovered Run is not
+dispatched implicitly; normal Run lifecycle controls remain responsible for continuing it.
+Focused behavioral coverage lives in `tests/thymira/test_core_conversations.py`.
+
+`SessionChat` adds read-only discussion alongside Run turns. A citationless or incorrectly cited
+answer can receive one repair on the same route. A discussion can make at most four server-run
+read queries before its answer and optional repair, with a six-request ceiling and 16,000 cumulative
+tokens; token settlement may end it earlier. The repair cannot publish work or issue a lookup. A
+routed, ledger-recorded model request interprets a message as an evidence question, clarification
+or work request; explicit Ask mode cannot dispatch work. Explanations read only bounded verified
+Session evidence and released results, carry server-resolved references, and are labelled as
+unaudited interpretations. Work
+still uses `ConversationWorkspace` and the existing THY/MIRA/Gate lifecycle. Discussion records
+and model evidence belong to the Session, use separate OS locks, and survive reconstruction.
+Before dispatch, each request is prepared from its actual messages and serialized schema, with an
+explicit local-tokenizer margin and a provider-enforced output cap. Remote tokenization and schema
+serialization can differ from that estimate. Durable dispatch counts and inclusive usage survive
+reopen; cached input and reasoning output remain visible subsets. Unknown usage conservatively
+reserves the remaining balance and ends the turn. Citation repair receives the full draft, the
+current human message and complete selected source records, without datasets or general history.
+The Run event envelope is unchanged. See `docs/contracts/conversation-sessions.md` and
+`tests/thymira/test_session_discussions.py` for retry, interruption and permission behavior.
+
+Session file questions recognize registered PNG filenames as plot metadata and instruct the model
+to inspect omitted file locations through the existing read-only virtual tree before claiming
+absence. Initial and compact requests share the lookup protocol: glob queries keep the literal
+scope in `path` and filename wildcards in `pattern`; grep searches contents and listings cover
+immediate children. Failed Run status does not erase existing file evidence.
+These relevance and prompt rules do not change artifact release, tool policy or Run authorization.
+For a complete simple location question naming a literal ASCII extension, Core may render exact
+positive file paths from the current authorized read and its visible server citations, preventing
+a later model answer from denying those observed paths. It preserves whole paths, labels limited
+pages and declines ambiguous questions or linked clarification context.
+After a read, compact continuations retain complete human restrictions, complete selected evidence
+pages and exact source IDs. They reserve an answer-only request before another lookup; a page that
+cannot fit is omitted whole with a safe context-limit record. The raw server evidence is retained.
+Selection, reservation and dispatch reuse the exact same framed prompt and schema estimate.
+
+The Session publishes work from the current human message and any explicitly linked human
+clarification. The model's `work_kind` is only a proposal; it cannot authorize training or
+evaluation. Brief replies continue only a persisted pending work clarification, while evidence
+questions, quotations and unlinked confirmations remain outside the work chain. Training requests
+do not require an existing model. Session intake asks for a missing training dataset or target;
+ambiguous model requests are clarified before publication. Plan validation requires a recorded
+source and inputs for evaluation and never substitutes training when they are absent. General
+analysis such as EDA also excludes evaluation specialists and rejects tasks that depend on them.
+When a human explicitly requests new training but the plan proposes evaluation, THY retargets that
+task to the experiment specialist and clears its prior-model inputs.
+
+Source-code requests can select an already cited artifact and literal search text. Core quotes
+numbered lines only after checking the approved snapshot, project/Session scope, artifact
+identity, digest, size and bounded text format. The model never reconstructs the quoted code;
+this read creates no Run and adds no provider request. Evidence clarifications remain separate
+from work intake. Review excerpts include the exact later human response, so an earlier request
+for review does not imply that a terminal technical failure is still waiting for approval.
+
+Runtime identity is captured once when the API or lifecycle worker composes its execution graph
+and is reused for Runs handled by that process generation. Each `run.started` stores the immutable
+generation id, deterministic fingerprint (when every declared layer can be verified), layer
+digests/counts and explicit unavailable reasons. The bounded layers distinguish the installed
+Thymira source snapshot, code objects and binding instances already loaded in memory, effective
+Pydantic schemas, resolved catalog/spec/prompt snapshot, installed LiteLLM/OpenAI/Pydantic schema
+transformer files, and Python runtime. Per-Run observations inspect loaded code and schemas only;
+they do not re-hash the source tree. A `runtime.attached` LOG_ONLY event records the generation
+that actually continues a Run after its graph factory resolves and links back to the original
+`run.started` sequence and hash. Resume retains the creation identity.
+
+These layers are deliberately scoped evidence. An installed source digest does not prove that
+every file was loaded; installed transformer files do not attest bytes already loaded by a lazy
+serializer. The local JSON Schema is a projection of the effective Pydantic classes, while the
+adapter receives a Pydantic class as `response_format`; neither proves HTTP serialization or
+remote acceptance. Module globals and dynamic settings are outside the loaded-code digest, and
+runtime skill catalogs deferred to per-Run roots make the catalog layer unavailable. Secrets,
+workspace data, artifacts, Run history and unrelated namespace packages are excluded. See
+`.agents/notes/implemented/2026-10-03-runtime-identity.md` for the evidence boundary and tests.
+
 ## Rules
 
 - Contracts live in `thymira.schemas`; do not redefine them here.

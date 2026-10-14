@@ -14,11 +14,19 @@ from typing import TYPE_CHECKING, Any
 
 from thymira.agents.settlement import has_open_parked_invocation
 from thymira.core.phases import Phase, can_reopen
+from thymira.core.risk_clarification import (
+    RiskClarificationRequest,
+    request_marker_from_intent,
+    validate_ordinary_transition,
+    validate_parked_clarification,
+    validate_replayed_clarification,
+)
 from thymira.core.run_state import (
     RunProjection,
     RunTransitionCommand,
     RunTransitionKind,
     RunTransitionResult,
+    apply_risk_clarification_transition,
     apply_transition,
     initial_run_state,
 )
@@ -49,6 +57,7 @@ from thymira.schemas import (
     EventSurface,
     EventType,
     PolicyDecision,
+    RunCondition,
     RunState,
     approval_names_decision,
     new_id,
@@ -248,10 +257,13 @@ class RunController:
         """Replay one event snapshot and retain its append version for the CAS write."""
         state = initial_run_state(run_id)
         events = self._store.events(run_id)
+        history: list[Event] = []
         for event in events:
             if event.type is not EventType.RUN_TRANSITIONED:
+                history.append(event)
                 continue
-            state = self._replay_transition(state, event)
+            state = self._replay_transition(state, event, history)
+            history.append(event)
         return state, len(events)
 
     def transition(
@@ -267,20 +279,55 @@ class RunController:
         context_hash = hash_authorization_context(context)
         self._validate_authorization(intent, decision, context, approval, current, context_hash)
         transition = _TRANSITIONS[context.action_kind]
-        result = apply_transition(
-            current,
-            RunTransitionCommand(transition, current.version),
-        )
+        clarification_marker = request_marker_from_intent(intent.payload)
+        clarification: RiskClarificationRequest | None = None
+        if clarification_marker is None:
+            result = apply_transition(current, RunTransitionCommand(transition, current.version))
+        else:
+            if intent.action_kind is not ActionKind.REQUEST_INFORMATION:
+                raise AuthorizationScopeError(
+                    "risk clarification must be authorized as a request for information"
+                )
+            field, expected_decision_id = clarification_marker
+            clarification = RiskClarificationRequest(
+                field=field,
+                expected_decision_id=expected_decision_id,
+                question_event_id=intent.payload.get("question_event_id", ""),
+            )
+            events = self._store.events(intent.run_id)
+            validate_parked_clarification(
+                events,
+                current,
+                run_id=intent.run_id,
+                request=clarification,
+            )
+            result = apply_risk_clarification_transition(
+                current,
+                RunTransitionCommand(transition, current.version),
+                field=clarification.field,
+                supersedes_decision_id=clarification.expected_decision_id,
+                question_event_id=clarification.question_event_id,
+            )
+        event_payload: dict[str, Any] = {
+            "intent": intent.model_dump(mode="json"),
+            "policy_decision": decision.model_dump(mode="json"),
+            "authorization_context": context.model_dump(mode="json"),
+            "approval_id": approval.id if approval is not None else None,
+        }
+        if clarification is not None:
+            event_payload.update(
+                {
+                    "risk_clarification": clarification.to_json_dict(),
+                    "resume_from": "risk_clarification",
+                    "supersedes_decision_id": clarification.expected_decision_id,
+                    "requested_by": intent.requester.to_json_dict(),
+                }
+            )
         event = self._append_transition(
             intent.run_id,
             result,
             expected_version=expected_version,
-            payload={
-                "intent": intent.model_dump(mode="json"),
-                "policy_decision": decision.model_dump(mode="json"),
-                "authorization_context": context.model_dump(mode="json"),
-                "approval_id": approval.id if approval is not None else None,
-            },
+            payload=event_payload,
             subject_id=intent.subject_id,
             causation_id=intent.id,
             authorization_context_sha256=context_hash,
@@ -511,12 +558,35 @@ class RunController:
             authorization_context_sha256=authorization_context_sha256,
         )
 
-    def _replay_transition(self, state: RunProjection, event: Event) -> RunProjection:
+    def _replay_transition(
+        self,
+        state: RunProjection,
+        event: Event,
+        events_before_transition: list[Event],
+    ) -> RunProjection:
         """Reapply one stored transition and reject a semantically invalid event history."""
         try:
             command = RunTransitionKind(event.payload["command"])
             expected_version = event.payload["from_version"]
-            result = apply_transition(state, RunTransitionCommand(command, expected_version))
+            if command is RunTransitionKind.WAIT_FOR_INFORMATION and (
+                state.condition is RunCondition.WAITING
+            ):
+                request = validate_replayed_clarification(
+                    events_before_transition,
+                    state,
+                    run_id=state.run_id,
+                    payload=event.payload,
+                )
+                result = apply_risk_clarification_transition(
+                    state,
+                    RunTransitionCommand(command, expected_version),
+                    field=request.field,
+                    supersedes_decision_id=request.expected_decision_id,
+                    question_event_id=request.question_event_id,
+                )
+            else:
+                validate_ordinary_transition(event.payload)
+                result = apply_transition(state, RunTransitionCommand(command, expected_version))
             persisted = RunState.model_validate_json(canonical_json(event.payload["state"]))
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError(

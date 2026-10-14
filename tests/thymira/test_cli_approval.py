@@ -473,6 +473,145 @@ def test_approve_shows_the_decision_the_run_is_parked_on_not_a_later_request() -
     assert "A second, unrelated call also needs review." not in result.output
 
 
+def test_approval_does_not_show_a_decision_resolved_on_a_later_event_page() -> None:
+    """The CLI consumer folds a later resolution before showing pending approval details."""
+    posted = False
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal posted
+        if request.method == "POST":
+            posted = True
+            return httpx.Response(202, json=_receipt(), request=request)
+        if request.url.path.endswith("/events"):
+            if request.url.params.get("after_seq") == "-1":
+                page = _events_page(
+                    [_event_envelope(0, "human.approval_requested", _pending_payload())]
+                )
+                page.update(has_more=True, next_after_seq=0)
+            else:
+                assert request.url.params.get("after_seq") == "0"
+                page = _events_page(
+                    [
+                        _event_envelope(
+                            1,
+                            "human.approval",
+                            {"decision_id": DECISION_ID, "approved": False},
+                        )
+                    ]
+                )
+            return httpx.Response(200, json=page, request=request)
+        return httpx.Response(200, json=_run_payload(), request=request)
+
+    result = _invoke_with_api(["approve", RUN_ID], handler)
+
+    assert result.exit_code == 1
+    assert f"Run '{RUN_ID}' has no pending human-approval decision." in result.output
+    assert "Pending decision" not in result.output
+    assert posted is False
+
+
+def test_pending_approval_keeps_the_parked_request_after_paged_resolutions() -> None:
+    """Only the resolved decision is removed; a malformed or foreign subject leaves others."""
+    second_decision_id = "policy_" + "4" * 32
+    foreign_decision_id = "policy_" + "9" * 32
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == f"/runs/{RUN_ID}/events"
+        if request.url.params.get("after_seq") == "-1":
+            page = _events_page(
+                [
+                    _event_envelope(0, "human.approval_requested", _pending_payload()),
+                    _event_envelope(1, "run.transitioned", _wait_for_approval_payload(DECISION_ID)),
+                ]
+            )
+            page.update(has_more=True, next_after_seq=1)
+            return httpx.Response(200, json=page, request=request)
+
+        assert request.url.params.get("after_seq") == "1"
+        page = _events_page(
+            [
+                _event_envelope(
+                    2,
+                    "human.approval_requested",
+                    _pending_payload(decision_id=second_decision_id),
+                ),
+                _event_envelope(
+                    3,
+                    "human.approval",
+                    {"decision_id": second_decision_id, "approved": True},
+                ),
+                _event_envelope(
+                    4, "human.approval", {"decision_id": foreign_decision_id, "approved": True}
+                ),
+                _event_envelope(5, "human.approval", {"decision_id": None, "approved": False}),
+            ]
+        )
+        return httpx.Response(200, json=page, request=request)
+
+    client = ApiClient("http://api.test", token=TEST_TOKEN, transport=httpx.MockTransport(handler))
+    try:
+        pending = client.get_pending_approval(RUN_ID)
+    finally:
+        client.close()
+
+    assert pending is not None
+    assert pending.decision_id == DECISION_ID
+
+
+def test_pending_approval_uses_latest_unresolved_request_when_parked_one_was_rejected() -> None:
+    """A rejected parked decision is removed, leaving the latest still-pending request visible."""
+    second_decision_id = "policy_" + "4" * 32
+    latest_decision_id = "policy_" + "5" * 32
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == f"/runs/{RUN_ID}/events"
+        if request.url.params.get("after_seq") == "-1":
+            page = _events_page(
+                [
+                    _event_envelope(0, "human.approval_requested", _pending_payload()),
+                    _event_envelope(
+                        1,
+                        "human.approval_requested",
+                        _pending_payload(decision_id=second_decision_id),
+                    ),
+                    _event_envelope(2, "run.transitioned", _wait_for_approval_payload(DECISION_ID)),
+                ]
+            )
+            page.update(has_more=True, next_after_seq=2)
+            return httpx.Response(200, json=page, request=request)
+
+        assert request.url.params.get("after_seq") == "2"
+        return httpx.Response(
+            200,
+            json=_events_page(
+                [
+                    _event_envelope(
+                        3,
+                        "human.approval",
+                        {"decision_id": DECISION_ID, "approved": False},
+                    ),
+                    _event_envelope(
+                        4,
+                        "human.approval_requested",
+                        _pending_payload(decision_id=latest_decision_id),
+                    ),
+                ]
+            ),
+            request=request,
+        )
+
+    client = ApiClient("http://api.test", token=TEST_TOKEN, transport=httpx.MockTransport(handler))
+    try:
+        pending = client.get_pending_approval(RUN_ID)
+    finally:
+        client.close()
+
+    assert pending is not None
+    assert pending.decision_id == latest_decision_id
+
+
 def test_review_shows_the_pending_decision_without_posting() -> None:
     """The read-only review command explains the decision before approval is chosen."""
     posted = False

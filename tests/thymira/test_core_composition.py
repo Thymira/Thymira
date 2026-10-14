@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from dataclasses import replace
+from typing import TYPE_CHECKING, Any, Literal
 
 import pytest
 from langgraph.graph import END
 
 from thymira.agents.llm import ScriptedProvider
 from thymira.core import (
+    AuditFreshnessService,
     InlineDispatcher,
     MiraControlPlane,
     RiskInterviewService,
@@ -28,18 +30,33 @@ from thymira.core import (
 from thymira.core.control_plane import RunEventLog
 from thymira.core.execution_review import INTERVIEW_LIMIT_RESUME_TARGET
 from thymira.core.governance_binding import final_governance_binding
+from thymira.core.graph.adapters import MiraSubgraph
 from thymira.core.graph.compose import _RuntimeGraphNodes
 from thymira.core.phases import Phase
 from thymira.core.usage import UsageLedger
 from thymira.events import verify_events
+from thymira.mira import load_default_packs
+from thymira.mira import orchestrator as mira_orchestrator
+from thymira.mira.agents.spec import AuditAgentSpec
+from thymira.mira.audit_io import AuditAgentOutput
+from thymira.mira.checks import (
+    ApplicabilityJudgment,
+    AuditContext,
+    AuditReport,
+    ControlStatus,
+)
+from thymira.mira.verification import DiscoveryLimits, FindingVerdict
 from thymira.policies import (
     ApprovalRequest,
     Approver,
+    FindingRule,
     Gate,
     LocalApprovalService,
+    Policy,
     PolicyEngine,
     RiskProfile,
     ToolCapability,
+    auto_approve,
     load_default_policy,
     pending_approvals,
 )
@@ -50,7 +67,10 @@ from thymira.schemas import (
     Actor,
     ActorKind,
     AuditFinding,
+    ConversationInput,
+    Decision,
     EventType,
+    Evidence,
     Framework,
     ModelRoutePolicy,
     RiskAssessment,
@@ -73,11 +93,15 @@ from thymira.state import (
 )
 from thymira.thy.models import AgentTask, ThyAgentKind, ThyPhase, ThyProgress
 from thymira.tools import ToolManager, ToolRegistry
+from thymira.tools.builtins.run_python import builtins_registry
+from thymira.tools.datasets import register_dataset
+from thymira.tools.models import ToolContext
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
+    from langchain_core.runnables import RunnableConfig
     from langgraph.graph.state import CompiledStateGraph
 
 _REVIEWER = Actor(kind="human", id="reviewer", authenticated=True)
@@ -225,13 +249,25 @@ def _runtime(
     finding: AuditFinding | None = None,
     usage_ledger: UsageLedger | None = None,
     approver: Approver | None = None,
+    work_kind: Literal["general", "evaluate_existing", "train_new"] | None = None,
 ) -> tuple[Run, LocalRunStore, SubgraphDeps, RunController]:
     """Build local runtime dependencies for a graph invocation."""
+    conversation = (
+        ConversationInput(
+            ordinal=1,
+            client_message_id="client-message",
+            message="Train a new model from this dataset.",
+            work_kind=work_kind,
+        )
+        if work_kind is not None
+        else None
+    )
     run = Run(
         id=finding.run_id if finding is not None else new_id("run"),
         project_id=new_id("project"),
         session_id=new_id("session"),
         prompt="Profile the dataset",
+        conversation=conversation,
     )
     store = LocalRunStore(tmp_path / "runs")
     store.create(run, actor=Actor.system())
@@ -923,6 +959,640 @@ def test_composed_graph_parks_a_review_required_run(tmp_path: Path) -> None:
     assert verify_events(store.events(run.id)).valid
 
 
+def _resolve_reopened_profile_review(
+    tmp_path: Path,
+    *,
+    run: Run,
+    deps: SubgraphDeps,
+    runtime_bindings: dict[str, Any],
+    graph_factory: Callable[[Run], Any],
+    build_mira: Callable[[], MiraSubgraph],
+    request_context: dict[str, Any],
+    human_answer: bool = True,
+    material_change: bool = False,
+) -> LocalRunStore:
+    """Rebuild persisted Run dependencies, resolve the exact human request, then verify binding."""
+    store = LocalRunStore(tmp_path / "runs")
+    event_log = RunEventLog(store, run.id)
+    controller = RunController(store)
+    engine = PolicyEngine(load_default_policy())
+    deps = replace(
+        deps,
+        event_log=event_log,
+        gate=Gate(engine, event_log),
+        artifact_store=LocalArtifactStore(tmp_path / "artifacts", run.id),
+        record_repository=LocalRecordRepository(tmp_path / "records"),
+        usage_ledger=UsageLedger(),
+    )
+    runtime_bindings.update(deps=deps, controller=controller)
+    graph_hash = build_mira().graph_version()
+    freshness = AuditFreshnessService(
+        store,
+        lambda run_id: LocalArtifactStore(tmp_path / "artifacts", run_id),
+        policy_sha256=engine.policy_sha256,
+        graph_definition_hash=graph_hash,
+    )
+    service = RunService(
+        store,
+        SessionService(LocalSessionRepository(tmp_path / "sessions")),
+        dispatcher=InlineDispatcher(store, graph_factory),
+        policy_sha256=engine.policy_sha256,
+        graph_definition_hash=graph_hash,
+        audit_freshness=freshness,
+    )
+    requests: list[ApprovalRequest] = []
+
+    def approving_human(request: ApprovalRequest) -> bool:
+        requests.append(request)
+        if material_change:
+            event_log.append(
+                EventType.MODEL_TRAINED,
+                Actor.system(),
+                {"model_id": "model_synthetic", "purpose": "material review-scope change"},
+                subject_id=run.id,
+            )
+        return human_answer
+
+    completed = service.resolve_approval(
+        run.id,
+        gate=Gate(
+            PolicyEngine(load_default_policy()),
+            event_log,
+            approver=approving_human,
+            human=_REVIEWER,
+        ),
+        actor=_REVIEWER,
+    )
+    assert len(requests) == 1
+    assert requests[0].request_payload == {"finding_review_context": request_context}
+    complete_events = [
+        event
+        for event in store.events(run.id)
+        if event.type is EventType.RUN_TRANSITIONED and event.payload.get("command") == "complete"
+    ]
+    if human_answer and not material_change:
+        assert completed.status.value == "COMPLETED"
+        terminal = complete_events[-1]
+        assert (
+            terminal.payload["finding_review_context_sha256"] == request_context["context_sha256"]
+        )
+    else:
+        assert completed.status.value == ("FAILED" if material_change else "BLOCKED")
+        assert not complete_events
+        assert not any(event.type is EventType.REWORK_STARTED for event in store.events(run.id))
+        if not material_change:
+            assert completed.error is None
+        if material_change:
+            assert "no longer matches the current audit evidence" in (completed.error or "")
+    assert verify_events(store.events(run.id)).valid
+    return store
+
+
+def _assert_profile_review_pending(
+    store: LocalRunStore,
+    run: Run,
+    state: RuntimeState,
+    candidate_texts: tuple[str, ...],
+) -> dict[str, Any]:
+    assert state.decision is not None
+    assert state.decision.decision.value == "REQUIRE_HUMAN_REVIEW"
+    assert state.decision.rule_id == "GOV-101-INDETERMINATE"
+    events = store.events(run.id)
+    assert EventType.MODEL_TRAINED not in [event.type for event in events]
+    evaluations = [
+        event.payload["control_evaluation"]
+        for event in events
+        if event.type is EventType.CONTROL_EVALUATION_RECORDED
+    ]
+    assert {evaluation["control_id"]: evaluation["status"] for evaluation in evaluations}[
+        "CREDIT-OVERSIGHT-001"
+    ] == "satisfied"
+    request_event = next(
+        event
+        for event in events
+        if event.type is EventType.HUMAN_APPROVAL_REQUESTED
+        and event.payload.get("decision_id") == state.decision.id
+    )
+    request_context = request_event.payload["finding_review_context"]
+    assert request_event.payload["summary"].startswith("Review the linked findings")
+    assert request_context["bounded_local_descriptive_scope"] is True
+    candidates = request_context["candidates"]
+    assert tuple(candidate["finding"] for candidate in candidates) == candidate_texts
+    assert all(candidate["supported"] is None and candidate["evidence"] for candidate in candidates)
+    return request_context
+
+
+def _redeliver_findings_gate(
+    graph: CompiledStateGraph, run_id: str, state: RuntimeState
+) -> RuntimeState:
+    """Replay the persisted MIRA-to-Gate edge as a checkpointed at-least-once delivery."""
+    config: RunnableConfig = {"configurable": {"thread_id": run_id}}
+    graph.update_state(config, state.model_dump(mode="python"), as_node="mira")
+    return RuntimeState.model_validate(graph.invoke(None, config))
+
+
+def _assert_profile_review_pending_redelivery(
+    store: LocalRunStore, graph: CompiledStateGraph, run: Run, state: RuntimeState
+) -> None:
+    """A repeated MIRA-to-Gate delivery reuses the one pending request and park."""
+    repeated = _redeliver_findings_gate(graph, run.id, state)
+    assert repeated.decision == state.decision
+    assert (
+        len(
+            [
+                event
+                for event in store.events(run.id)
+                if event.type is EventType.HUMAN_APPROVAL_REQUESTED
+            ]
+        )
+        == 1
+    )
+    assert (
+        len(
+            [
+                event
+                for event in store.events(run.id)
+                if event.type is EventType.RUN_TRANSITIONED
+                and event.payload.get("command") == "wait_for_approval"
+            ]
+        )
+        == 1
+    )
+
+
+def _assert_terminal_review_redelivery(
+    store: LocalRunStore,
+    graph_factory: Callable[[Run], Any],
+    run: Run,
+    state: RuntimeState,
+) -> None:
+    """An answered review redelivery leaves the one exact terminal binding unchanged."""
+    transition_count = len(
+        [event for event in store.events(run.id) if event.type is EventType.RUN_TRANSITIONED]
+    )
+    replayed = _redeliver_findings_gate(graph_factory(run), run.id, state)
+    assert replayed.decision == state.decision
+    assert (
+        len([event for event in store.events(run.id) if event.type is EventType.RUN_TRANSITIONED])
+        == transition_count
+    )
+    assert (
+        len(
+            [
+                event
+                for event in store.events(run.id)
+                if event.type is EventType.HUMAN_APPROVAL_REQUESTED
+            ]
+        )
+        == 1
+    )
+
+
+class _ProfileReviewHarness:
+    """Build one real Core/MIRA path for the parameterized findings-review contract."""
+
+    def __init__(
+        self,
+        tmp_path: Path,
+        verdict_supported: bool | None,
+        scope_effect: str,
+        candidate_count: int,
+        monkeypatch: pytest.MonkeyPatch,
+        auto_approver: bool,
+    ) -> None:
+        self.tmp_path = tmp_path
+        self.verdict_supported = verdict_supported
+        self.scope_effect = scope_effect
+        self.candidate_count = candidate_count
+        work_kind = "train_new" if scope_effect == "train_new" else None
+        self.run, self.store, self.deps, self.controller = _runtime(
+            tmp_path,
+            work_kind=work_kind,
+            approver=auto_approve if auto_approver else None,
+        )
+        self._prepare_tool_manager()
+        self._apply_policy_overlay()
+        self._simulate_incomplete_control(monkeypatch)
+        self._prepare_profile()
+        self.candidate_texts = (
+            "The source evidence does not establish how the supplied scores were generated.",
+            "The method used to calculate those scores is undocumented.",
+        )
+        self.dataset_path = tmp_path / "synthetic.csv"
+        self.dataset_path.write_text(
+            "applicant,score,review_time\na,0.1,2\nb,0.5,4\nc,0.9,8\n",
+            encoding="utf-8",
+        )
+        self.thy_agent_id = new_id("agent")
+        self.spec = AuditAgentSpec(
+            name="synthetic-internal-auditor",
+            framework=Framework.INTERNAL,
+            task_kinds=("audit_judgement",),
+            max_turns=1,
+            system_prompt="Use only the supplied event evidence.",
+        )
+        self.agent_calls = 0
+        self.candidate_ids: list[str] = []
+        self.packs = load_default_packs()
+        self.thy = _ProfileReviewThy(self)
+        self.runtime_bindings: dict[str, Any] = {
+            "deps": self.deps,
+            "controller": self.controller,
+        }
+
+    def _prepare_tool_manager(self) -> None:
+        self.deps = replace(self.deps, tool_manager=ToolManager(builtins_registry()))
+
+    def _apply_policy_overlay(self) -> None:
+        if self.scope_effect != "custom_block":
+            return
+        overlay = Policy(
+            name="same-id-overlay",
+            version="1.0",
+            finding_rules=(
+                FindingRule(
+                    id="GOV-101",
+                    decision=Decision.BLOCK,
+                    reason="overlay-specific prohibition",
+                    min_severity=Severity.CRITICAL,
+                    control_ids=("A12",),
+                ),
+            ),
+        )
+        engine = PolicyEngine(load_default_policy("base").merged_with(overlay))
+        self.deps = replace(self.deps, gate=Gate(engine, self.deps.event_log))
+
+    def _simulate_incomplete_control(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        if self.scope_effect != "incomplete":
+            return
+        original_audit_run = mira_orchestrator.audit_run
+
+        def report_with_unassessed_control(context: AuditContext) -> AuditReport:
+            report = original_audit_run(context)
+            first, *remaining = report.controls
+            unassessed = first.model_copy(update={"status": ControlStatus.NOT_EVALUATED})
+            return report.model_copy(update={"controls": (unassessed, *remaining)})
+
+        monkeypatch.setattr(mira_orchestrator, "audit_run", report_with_unassessed_control)
+
+    def _prepare_profile(self) -> None:
+        self.profile = _complete_activity_profile(self.run).model_copy(
+            update={
+                "purpose": "Describe credit history correlations for audit only.",
+                "decision_effect": (
+                    "Does not prioritize, approve, deny, or otherwise change application decisions."
+                ),
+                "autonomy": "No automated prediction, recommendation, or decision is produced.",
+                "human_oversight": "An analyst reviews the description before any separate use.",
+                "sensitive_attributes": ("age",),
+                "potential_consequences": (
+                    "Misreading a correlation could lead to an incorrect analyst conclusion.",
+                ),
+            }
+        )
+        self.deps.event_log.append(
+            EventType.ACTIVITY_PROFILE_RECORDED,
+            Actor.system(),
+            {"activity_profile": self.profile.model_dump(mode="json")},
+            subject_id=self.profile.id,
+        )
+
+    def run_agent(
+        self, selected_spec: AuditAgentSpec, run_id: str, events: tuple, _report: AuditReport
+    ) -> AuditAgentOutput:
+        self.agent_calls += 1
+        action = next(
+            event
+            for event in reversed(events)
+            if event.type is EventType.TOOL_COMPLETED
+            and event.payload.get("tool") == "profile_dataset"
+        )
+        action_evidence = Evidence(kind="event", ref=f"seq:{action.seq}", sha256=action.hash)
+        findings = tuple(
+            AuditFinding(
+                id=new_id("finding"),
+                run_id=run_id,
+                control_id="A12",
+                framework=Framework.INTERNAL,
+                title=f"Source score lineage obligation {index + 1}",
+                finding=self.candidate_texts[index],
+                severity=Severity.CRITICAL,
+                confidence=0.9,
+                evidence=(action_evidence,),
+                agent_id=new_id("agent"),
+            )
+            for index in range(self.candidate_count)
+        )
+        self.candidate_ids.extend(finding.id for finding in findings)
+        return AuditAgentOutput.from_spec(selected_spec, findings=findings)
+
+    def verify_finding(
+        self, _finding: AuditFinding, events: tuple, _report: AuditReport
+    ) -> FindingVerdict:
+        profile_event = next(
+            event for event in reversed(events) if event.type is EventType.ACTIVITY_PROFILE_RECORDED
+        )
+        action = next(
+            event
+            for event in reversed(events)
+            if event.type is EventType.TOOL_COMPLETED
+            and event.payload.get("tool") == "profile_dataset"
+        )
+        evidence = (
+            Evidence(kind="event", ref=f"seq:{profile_event.seq}", sha256=profile_event.hash),
+            Evidence(kind="event", ref=f"seq:{action.seq}", sha256=action.hash),
+        )
+        return FindingVerdict(
+            supported=self.verdict_supported,
+            rationale="The local profile does not include evidence about source score provenance.",
+            applicability=ApplicabilityJudgment(
+                status="applicable",
+                rationale="The profile cannot establish how the supplied scores were generated.",
+                concrete_action=(
+                    "Review the registered source file's provenance before relying on correlations."
+                ),
+                evidence=evidence,
+            ),
+        )
+
+    def build_mira(self) -> MiraSubgraph:
+        return MiraSubgraph(
+            self.run,
+            self.profile,
+            self.packs,
+            Actor.system(),
+            frameworks=(Framework.INTERNAL,),
+            specs=(self.spec,),
+            run_agent=self.run_agent,
+            verify_finding=None if self.scope_effect == "missing_verifier" else self.verify_finding,
+            discovery=DiscoveryLimits(max_rounds=1),
+        )
+
+    def classify(self, state: RuntimeState, _deps: SubgraphDeps) -> RuntimeState:
+        return state.model_copy(
+            update={
+                "risk_profile": RiskProfile(
+                    risk_level="limited",
+                    activity_category="data_analysis",
+                    confidence=1.0,
+                )
+            }
+        )
+
+    def graph_factory(self, _run: Run) -> CompiledStateGraph:
+        return build_runtime_graph(
+            self.thy,
+            self.build_mira(),
+            checkpointer=StateCheckpointer(
+                LocalCheckpointRepository(self.tmp_path / "checkpoints")
+            ),
+            deps=self.runtime_bindings["deps"],
+            controller=self.runtime_bindings["controller"],
+            classify=self.classify,
+        )
+
+    def invoke(self) -> tuple[CompiledStateGraph, RuntimeState]:
+        graph = self.graph_factory(self.run)
+        state = RuntimeState.model_validate(
+            graph.invoke(
+                initial_runtime_state(self.run),
+                {"configurable": {"thread_id": self.run.id}},
+            )
+        )
+        return graph, state
+
+
+class _ProfileReviewThy(_ThySubgraph):
+    """Register a real dataset and call the public local profiling tool."""
+
+    def __init__(self, harness: _ProfileReviewHarness) -> None:
+        self.harness = harness
+
+    def invoke(self, state: RuntimeState, *, deps: SubgraphDeps) -> RuntimeState:
+        harness = self.harness
+        deps.event_log.append(
+            EventType.AGENT_MESSAGE,
+            Actor.system(),
+            {
+                "agent": "risk-classifier",
+                "risk_level": "limited",
+                "activity_category": "data_analysis",
+            },
+            subject_id=harness.thy_agent_id,
+        )
+        register_dataset(
+            deps.artifact_store,
+            harness.dataset_path,
+            "synthetic",
+            produced_by=harness.thy_agent_id,
+        )
+        if harness.scope_effect == "superseded":
+            deps.artifact_store.save_bytes(
+                "profile/synthetic.json", b"{}", produced_by=harness.thy_agent_id
+            )
+        for artifact in deps.artifact_store.list_active():
+            deps.event_log.append(
+                EventType.ARTIFACT_CREATED,
+                Actor.system(),
+                {
+                    "name": artifact.name,
+                    "sha256": artifact.sha256,
+                    "artifact_id": artifact.id,
+                    "produced_by": artifact.produced_by,
+                },
+                subject_id=artifact.id,
+            )
+        workspace = harness.tmp_path / "workspace"
+        workspace.mkdir(exist_ok=True)
+        execution = deps.tool_manager.execute(
+            ToolContext(
+                run_id=state.run_id,
+                agent_id=harness.thy_agent_id,
+                workspace=workspace,
+                event_log=deps.event_log,
+                gate=deps.gate,
+                artifact_store=deps.artifact_store,
+                risk_profile=RiskProfile(
+                    risk_level="limited",
+                    activity_category="data_analysis",
+                    confidence=1.0,
+                ),
+            ),
+            "profile_dataset",
+            {
+                "dataset": "synthetic",
+                "description": "Describe local correlations",
+                "include_plots": harness.scope_effect == "plots",
+            },
+        )
+        assert execution.call.status.value == "COMPLETED"
+        if harness.scope_effect == "model_trained":
+            deps.event_log.append(
+                EventType.MODEL_TRAINED,
+                Actor.system(),
+                {"model_id": "model_synthetic", "purpose": "training effect in snapshot"},
+                subject_id=state.run_id,
+            )
+        elif harness.scope_effect == "unknown_tool":
+            deps.event_log.append(
+                EventType.TOOL_COMPLETED,
+                Actor(kind=ActorKind.TOOL, id="unregistered-external-tool", authenticated=True),
+                {"tool": "external_fetch", "status": "COMPLETED"},
+                subject_id=new_id("tool"),
+            )
+        return state.model_copy(update={"phase": Phase.PREPARATION})
+
+
+def _assert_profile_review_blocked(harness: _ProfileReviewHarness, state: RuntimeState) -> None:
+    assert state.decision is not None
+    assert state.decision.decision.value != "REQUIRE_HUMAN_REVIEW"
+    assert state.decision.rule_id != "GOV-101-INDETERMINATE"
+    events = harness.store.events(harness.run.id)
+    assert not any(event.type is EventType.HUMAN_APPROVAL_REQUESTED for event in events)
+    report_event = next(event for event in events if event.type is EventType.AUDIT_COMPLETED)
+    report = AuditReport.model_validate(report_event.payload["audit_report"])
+    if harness.verdict_supported is False:
+        assert any(
+            assessment.finding_id == harness.candidate_ids[0] and assessment.supported is False
+            for assessment in report.applicability_assessments
+        )
+        assert not any(finding.id == harness.candidate_ids[0] for finding in report.findings)
+        assert state.decision.decision.value in {"PASS", "WARNING"}
+        assert harness.controller.current_state(harness.run.id).outcome is RunOutcome.COMPLETED
+    elif harness.verdict_supported is True:
+        assert all(
+            any(finding.id == finding_id for finding in report.findings)
+            for finding_id in harness.candidate_ids
+        )
+        assert state.decision.rule_id == "GOV-101"
+        assert state.decision.decision.value == "BLOCK"
+        assert harness.controller.current_state(harness.run.id).outcome is RunOutcome.BLOCKED
+    elif harness.scope_effect == "incomplete":
+        assert state.decision.decision.value == "BLOCK"
+        assert state.decision.rule_id == "audit_incomplete"
+        assert report.status == "incomplete"
+        assert any(control.status is ControlStatus.NOT_EVALUATED for control in report.controls)
+        assert any(finding.id == harness.candidate_ids[0] for finding in report.findings)
+        assert harness.controller.current_state(harness.run.id).outcome is RunOutcome.BLOCKED
+        assert not any(
+            event.type is EventType.RUN_TRANSITIONED and event.payload.get("command") == "complete"
+            for event in events
+        )
+    else:
+        assert state.decision.rule_id == "GOV-101"
+        assert any(finding.id == harness.candidate_ids[0] for finding in report.findings)
+        assert state.decision.decision.value == "BLOCK"
+        assert harness.controller.current_state(harness.run.id).outcome is RunOutcome.BLOCKED
+        assert harness.scope_effect in {
+            "train_new",
+            "model_trained",
+            "unknown_tool",
+            "missing_verifier",
+            "custom_block",
+        }
+
+
+@pytest.mark.parametrize(
+    ("verdict_supported", "scope_effect", "human_action", "candidate_count"),
+    [
+        pytest.param(
+            None, "bounded", "approve", 2, id="review-two-distinct-claims-approve-after-reopen"
+        ),
+        pytest.param(
+            None, "bounded", "approve-auto", 1, id="automatic-approver-stays-pending-for-human"
+        ),
+        pytest.param(None, "bounded", "reject", 1, id="review-reject"),
+        pytest.param(None, "plots", "approve", 1, id="bounded-eda-plots-reach-reviewed-completion"),
+        pytest.param(
+            None, "superseded", "approve", 1, id="archived-revision-keeps-review-eligible"
+        ),
+        pytest.param(None, "bounded", "material-change", 1, id="review-invalidated-by-new-effect"),
+        pytest.param(True, "bounded", "none", 1, id="confirmed-critical-remains-blocked"),
+        pytest.param(False, "bounded", "none", 1, id="refuted-agent-finding-is-traced"),
+        pytest.param(None, "train_new", "none", 1, id="typed-training-request-is-out-of-scope"),
+        pytest.param(None, "model_trained", "none", 1, id="model-effect-is-out-of-scope"),
+        pytest.param(None, "unknown_tool", "none", 1, id="unregistered-tool-is-out-of-scope"),
+        pytest.param(
+            None, "missing_verifier", "none", 1, id="missing-verification-metadata-is-conservative"
+        ),
+        pytest.param(None, "custom_block", "none", 1, id="custom-gov-101-overlay-remains-a-block"),
+        pytest.param(None, "incomplete", "none", 1, id="not-evaluated-required-control-blocks-run"),
+    ],
+)
+def test_composed_graph_reviews_indeterminate_critical_candidate_in_profile_scope(
+    tmp_path: Path,
+    verdict_supported: bool | None,
+    scope_effect: str,
+    human_action: str,
+    candidate_count: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Real MIRA evidence reaches Gate only for an exact bounded descriptive review."""
+    harness = _ProfileReviewHarness(
+        tmp_path,
+        verdict_supported,
+        scope_effect,
+        candidate_count,
+        monkeypatch,
+        auto_approver=human_action == "approve-auto",
+    )
+    graph, state = harness.invoke()
+    assert harness.agent_calls == 1
+    if scope_effect == "plots":
+        plots = [
+            artifact
+            for artifact in harness.deps.artifact_store.list_active()
+            if artifact.kind.value == "plot"
+        ]
+        assert len(plots) == 2
+        assert harness.deps.artifact_store.verify() == []
+    if verdict_supported is None and scope_effect in {"bounded", "superseded", "plots"}:
+        request_context = _assert_profile_review_pending(
+            harness.store, harness.run, state, harness.candidate_texts[:candidate_count]
+        )
+        _assert_profile_review_pending_redelivery(harness.store, graph, harness.run, state)
+        if human_action == "approve-auto":
+            assert not any(
+                event.type is EventType.HUMAN_APPROVAL
+                for event in harness.store.events(harness.run.id)
+            )
+        harness.store = _resolve_reopened_profile_review(
+            tmp_path,
+            run=harness.run,
+            deps=harness.deps,
+            runtime_bindings=harness.runtime_bindings,
+            graph_factory=harness.graph_factory,
+            build_mira=harness.build_mira,
+            request_context=request_context,
+            human_answer=human_action != "reject",
+            material_change=human_action == "material-change",
+        )
+        assert harness.agent_calls == 1
+        assert (
+            len(
+                [
+                    event
+                    for event in harness.store.events(harness.run.id)
+                    if event.type is EventType.AUDIT_COMPLETED
+                ]
+            )
+            == 1
+        )
+        if human_action in {"approve", "approve-auto", "reject"}:
+            _assert_terminal_review_redelivery(
+                harness.store, harness.graph_factory, harness.run, state
+            )
+        if human_action == "approve":
+            assert not any(
+                event.type is EventType.RUN_TRANSITIONED
+                and event.payload.get("command") == "reopen"
+                for event in harness.store.events(harness.run.id)
+            )
+    else:
+        _assert_profile_review_blocked(harness, state)
+    assert verify_events(harness.store.events(harness.run.id)).valid
+
+
 def test_composed_graph_passes_usage_snapshot_to_gate(tmp_path: Path) -> None:
     """The composed Gate receives and returns the authoritative ledger snapshot."""
     run_id = new_id("run")
@@ -1058,6 +1728,55 @@ def test_composed_graph_hash_changes_when_a_child_version_changes() -> None:
     assert first != graph_definition_hash(thy, _NewMira())
 
 
+@pytest.mark.parametrize("answer", ["missing", "wrong-subject", "rejected-then-approved"])
+def test_completion_requires_exact_uncontradicted_human_approval(
+    tmp_path: Path, answer: str
+) -> None:
+    """A direct resume at completion cannot convert an unauthorised review into success."""
+    finding = AuditFinding(
+        id=new_id("finding"),
+        run_id=new_id("run"),
+        control_id="GOV-TEST",
+        framework=Framework.EU_AI_ACT,
+        title="Human review required",
+        finding="The result needs a human decision.",
+        severity=Severity.HIGH,
+        confidence=0.95,
+    )
+    run, store, deps, controller = _runtime(tmp_path, finding=finding)
+    controller.advance(run.id, RunTransitionKind.START)
+    controller.advance(run.id, RunTransitionKind.BEGIN_EXECUTION)
+    controller.advance(run.id, RunTransitionKind.BEGIN_AUDIT)
+    state = _MiraSubgraph(finding).invoke(initial_runtime_state(run), deps=deps)
+    decision = deps.gate.review_findings(state.findings)
+    assert decision.decision.value == "REQUIRE_HUMAN_REVIEW"
+    state = state.model_copy(update={"decision": decision})
+    if answer != "missing":
+        for approved in [False, True] if answer == "rejected-then-approved" else [True]:
+            deps.event_log.append(
+                EventType.HUMAN_APPROVAL,
+                _REVIEWER,
+                {"decision_id": decision.id, "approved": approved, "automatic": False},
+                subject_id="wrong-subject" if answer == "wrong-subject" else decision.subject_id,
+            )
+    nodes = _RuntimeGraphNodes(
+        _ThySubgraph(),
+        _MiraSubgraph(finding),
+        deps,
+        controller,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    with pytest.raises(RuntimeError, match="authorized"):
+        nodes.complete(state)
+    assert nodes.route(state) == END
+    assert controller.current_state(run.id).condition is RunCondition.ACTIVE
+    assert verify_events(store.events(run.id)).valid
+
+
 def test_a_control_plane_approval_resumes_a_parked_run(tmp_path: Path) -> None:
     """A human answer recorded under the frozen contract field must unpark the Run.
 
@@ -1096,11 +1815,10 @@ def test_a_control_plane_approval_resumes_a_parked_run(tmp_path: Path) -> None:
     assert RunController(store).current_state(run.id).condition is RunCondition.WAITING
 
     reviewer = Actor(kind="human", id="reviewer", authenticated=True)
-    decision_id = next(
-        event.payload["id"]
-        for event in store.events(run.id)
-        if event.type is EventType.POLICY_DECISION
+    decision_event = next(
+        event for event in store.events(run.id) if event.type is EventType.POLICY_DECISION
     )
+    decision_id = decision_event.payload["id"]
     RunEventLog(store, run.id).append(
         EventType.HUMAN_APPROVAL,
         reviewer,
@@ -1111,7 +1829,7 @@ def test_a_control_plane_approval_resumes_a_parked_run(tmp_path: Path) -> None:
             "authorization_context_sha256": "0" * 64,
             "approved": True,
         },
-        subject_id=run.id,
+        subject_id=decision_event.payload["subject_id"],
     )
     service = RunService(
         store,

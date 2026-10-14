@@ -219,3 +219,105 @@ def test_plan_not_found_remains_a_domain_outcome() -> None:
         client.close()
 
     assert raised.value.code == "plan_not_found"
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement", "expected_error"),
+    [
+        ("artifact", [], "invalid 'artifact' field"),
+        ("sha256", "not-a-sha256", "invalid 'sha256' field"),
+        ("content", "# Plan\n\nAltered bytes", "does not match its digest"),
+        ("run_id", "run_" + "9" * 32, "belongs to a different Run"),
+        ("advisory", False, "invalid content fields"),
+        ("content", 42, "invalid content fields"),
+    ],
+    ids=[
+        "artifact-not-object",
+        "malformed-digest",
+        "altered-content",
+        "foreign-run",
+        "non-advisory",
+        "non-text-content",
+    ],
+)
+def test_plan_does_not_render_an_unverified_durable_artifact(
+    field: str, replacement: object, expected_error: str
+) -> None:
+    """The CLI withholds persisted plan content unless its artifact passes verification."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(202, json=_receipt(), request=request)
+        if request.url.params.get("follow") == "true":
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=_turn_ended_frame(),
+                request=request,
+            )
+        if request.url.path == f"/runs/{RUN_ID}":
+            return httpx.Response(200, json=_run_payload(), request=request)
+        payload = _durable_plan()
+        if field == "artifact":
+            payload["artifact"] = replacement
+        else:
+            artifact = payload["artifact"]
+            assert isinstance(artifact, dict)
+            artifact[field] = replacement
+        return httpx.Response(200, json=payload, request=request)
+
+    result = _invoke_with_api(["plan", RUN_ID], handler)
+
+    assert result.exit_code == 1
+    assert expected_error in result.output
+    assert "# Plan" not in result.output
+    assert "Profile data" not in result.output
+
+
+@pytest.mark.parametrize(
+    "empty_board",
+    [False, True],
+    ids=["verified-artifact", "empty-without-artifact"],
+)
+def test_plan_rejects_a_durable_board_for_a_different_run(empty_board: bool) -> None:
+    """A well-formed board cannot substitute another Run's plan in the CLI response."""
+    foreign_run_id = "run_" + "9" * 32
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "POST":
+            return httpx.Response(202, json=_receipt(), request=request)
+        if request.url.params.get("follow") == "true":
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=_turn_ended_frame(),
+                request=request,
+            )
+        if request.url.path == f"/runs/{RUN_ID}":
+            return httpx.Response(200, json=_run_payload(), request=request)
+
+        assert request.method == "GET"
+        assert request.url.path == f"/runs/{RUN_ID}/plan"
+        payload = _durable_plan(empty=empty_board)
+        payload["run_id"] = foreign_run_id
+        artifact = payload["artifact"]
+        if artifact is not None:
+            assert isinstance(artifact, dict)
+            artifact["run_id"] = foreign_run_id
+        return httpx.Response(200, json=payload, request=request)
+
+    result = _invoke_with_api(["plan", RUN_ID], handler)
+
+    assert result.exit_code == 1
+    assert result.output.strip().splitlines()[-2:] == [
+        "Error: The durable plan belongs to a different Run.",
+        "No plan could be produced.",
+    ]
+    assert foreign_run_id not in result.output
+    assert "Plan ID:" not in result.output
+    assert "# Plan" not in result.output
+    assert "Profile data" not in result.output
+    assert [request.method for request in requests] == ["POST", "GET", "GET", "GET"]
+    assert requests[-1].url.path == f"/runs/{RUN_ID}/plan"

@@ -12,6 +12,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
 from thymira.core.control_plane import RunController
+from thymira.core.execution_review import (
+    PLAN_RESUME_TARGET,
+    continuation_target,
+    human_approval_outcome,
+    parked_review_decision,
+    review_resume_target,
+)
 from thymira.core.graph.adapters import build_runtime_graph_factory
 from thymira.core.lifecycle_adapter import (
     LifecycleGraphExecutor,
@@ -20,8 +27,10 @@ from thymira.core.lifecycle_adapter import (
     build_lifecycle_worker,
 )
 from thymira.core.lifecycle_worker import BoundedControlInputConsumer, LifecycleOwnerLoop
+from thymira.core.plan_review import plan_review_from_events, validate_current_plan_review
 from thymira.core.rabbitmq import RabbitMqConsumer, RabbitMqSettings
 from thymira.core.run_state import RunTransitionKind
+from thymira.core.runtime_identity import capture_runtime_identity
 from thymira.schemas import (
     ControlInput,
     ControlInputKind,
@@ -29,10 +38,13 @@ from thymira.schemas import (
     EventType,
     JsonObject,
     ModelRoutePolicy,
+    RunCondition,
+    WaitReason,
 )
 from thymira.state import (
     ArtifactStore,
     LifecycleBackendUnavailableError,
+    LifecycleError,
     LifecycleRepository,
     LocalArtifactStore,
     LocalBoardRepository,
@@ -53,7 +65,7 @@ if TYPE_CHECKING:
     from thymira.core.dispatch import GraphFactory
     from thymira.core.lifecycle_adapter import LifecycleNotificationConsumer
     from thymira.policies import Gate, PolicyEngine
-    from thymira.schemas import Run
+    from thymira.schemas import Event, PolicyDecision, Run
     from thymira.tools import ToolRegistry
 
 
@@ -111,6 +123,25 @@ class _OwnerControlConsumer:
             if transition is RunTransitionKind.PAUSE:
                 controller.pause_owned(live_owner.run_id, payload=payload)
             else:
+                if transition is RunTransitionKind.RESUME:
+                    current = controller.current_state(live_owner.run_id)
+                    if current.condition is RunCondition.WAITING:
+                        if current.wait_reason is WaitReason.APPROVAL:
+                            target = _approved_resume_target(
+                                self._run_store.events(live_owner.run_id), live_owner.run_id
+                            )
+                            if target is None:
+                                raise LifecycleError(
+                                    "a waiting approval needs its exact human answer"
+                                )
+                            if target == PLAN_RESUME_TARGET:
+                                _validate_plan_resume_work(
+                                    self._run_store.events(live_owner.run_id),
+                                    self._repository.get_run(live_owner.run_id),
+                                )
+                            payload["resume_from"] = target
+                        elif current.wait_reason is WaitReason.INFORMATION:
+                            payload["resume_from"] = "information"
                 controller.advance(live_owner.run_id, transition, payload=payload)
         else:
             live_owner.append(
@@ -132,6 +163,44 @@ class _OwnerControlConsumer:
             "kind": command.kind.value,
             "run_id": live_owner.run_id,
         }
+
+
+def _validate_plan_resume_work(events: Sequence[Event], run: Run) -> None:
+    """Refuse changed immutable work before the owner writes a plan RESUME transition.
+
+    The current policy is checked again by the graph adapter before any task or tool executes.
+    Here the persisted Gate fingerprint binds the already approved Run/work snapshot.
+    """
+    decision = parked_review_decision(events, run.id)
+    if decision is None:
+        raise LifecycleError("approved plan resume has no parked decision")
+    validate_current_plan_review(events, run, decision, policy_sha256=decision.policy_sha256)
+
+
+def _approved_resume_target(events: Sequence[Event], run_id: str) -> str | None:
+    """Derive a waiting-approval continuation from its durable decision and answer."""
+    decision = parked_review_decision(events, run_id)
+    if decision is None:
+        return None
+    target = review_resume_target(events, decision.id)
+    outcome = human_approval_outcome(events, decision)
+    if target == PLAN_RESUME_TARGET:
+        return _approved_plan_resume_target(events, run_id, decision, outcome)
+    if outcome is None or (outcome is False and decision.subject_kind != "tool_call"):
+        return None
+    return continuation_target(events, decision)
+
+
+def _approved_plan_resume_target(
+    events: Sequence[Event], run_id: str, decision: PolicyDecision, outcome: bool | None
+) -> str | None:
+    """Require an exact human approval and intact Gate snapshot for a plan continuation."""
+    if outcome is not True:
+        return None
+    review = plan_review_from_events(events, run_id)
+    if review is None or review.decision != decision:
+        raise LifecycleError("approved plan resume has no matching durable candidate")
+    return PLAN_RESUME_TARGET
 
 
 def _require_local_lifecycle_backend() -> None:
@@ -187,6 +256,20 @@ def build_production_lifecycle_worker(
             owner_context,
             before_model_request=intercept_next_model_step,
         )
+    runtime_catalog = getattr(graph_factory, "runtime_catalog_snapshot", None)
+    runtime_schemas = getattr(graph_factory, "runtime_schemas", None)
+    runtime_catalog_unavailable_reason = getattr(
+        graph_factory,
+        "runtime_catalog_unavailable_reason",
+        None
+        if runtime_catalog is not None
+        else "graph factory did not expose a resolved catalog snapshot",
+    )
+    runtime_identity = capture_runtime_identity(
+        catalog_snapshot=runtime_catalog,
+        catalog_unavailable_reason=runtime_catalog_unavailable_reason,
+        schemas=runtime_schemas,
+    )
     terminal_auditor = getattr(graph_factory, "audit_terminal", None)
     if terminal_auditor is not None and not callable(terminal_auditor):
         raise TypeError("the lifecycle graph factory exposes a non-callable terminal auditor")
@@ -208,6 +291,8 @@ def build_production_lifecycle_worker(
         run_store,
         graph_factory,
         owner_context,
+        runtime_identity=runtime_identity,
+        runtime_schemas=runtime_schemas,
     )
     return build_lifecycle_worker(
         consumer,

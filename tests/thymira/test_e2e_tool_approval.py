@@ -546,9 +546,10 @@ def test_a_rejection_resumes_and_the_agent_gets_a_factual_denial_without_reaskin
     assert len(adapting.seen) == 1
     assert _REJECTION_REASON in adapting.seen[0]
     assert "[denied]" in adapting.seen[0]
-    assert _values(events, EventType.AGENT_COMPLETED, "end_reason")[-1] == (
-        AgentEndReason.COMPLETED.value
-    )
+    completion = _of(events, EventType.AGENT_COMPLETED)[-1]
+    assert completion.payload["status"] == "FAILED"
+    assert completion.payload["end_reason"] == AgentEndReason.TOOL_FAILURE.value
+    assert completion.payload["completion_evidence"]["unresolved_tool_call_ids"]
     assert len(_of(events, EventType.AUDIT_COMPLETED)) == 1
     assert verify_events(events).valid
 

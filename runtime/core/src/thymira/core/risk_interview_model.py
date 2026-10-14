@@ -13,11 +13,11 @@ from thymira.agents.llm.base import LLMStructuredOutputError
 from thymira.agents.llm.routing import Role, choose
 from thymira.agents.request_ledger import RequestLedger, instrument_provider
 from thymira.agents.route_policy import enforce_model_route
-from thymira.events import scrub_credentials
+from thymira.events import canonical_json, scrub_credentials
 from thymira.schemas import ActivityProfile, Actor, EventType
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable, Mapping, Sequence
 
     from thymira.agents.llm import LLMProvider
     from thymira.agents.llm.base import LLMResponse
@@ -74,23 +74,64 @@ infer a fact from domain conventions, and never fill a field the context leaves 
 human is asked instead. A list-valued fact is a comma-separated list; write "none" only when the
 context explicitly states that nothing applies. Each value must be a concrete statement of the
 fact, in the language of the context, and each reason must be short and factual.
+Describe the current Run request. Broader project capabilities and possible later training,
+deployment, or decision-making do not mean this Run requests them. Preserve project restrictions
+and explicit limits such as offline research or no live decisions. If the current request and
+project declarations conflict, omit the disputed fact so a human can clarify it.
 """
+_ACTIVITY_FACT_DEFINITIONS: dict[str, str] = {
+    "purpose": "The concrete task this Run requests from the system.",
+    "affected_population": (
+        "The people or groups that could be affected by this activity or use of its outputs, "
+        "including indirect effects."
+    ),
+    "decision_effect": (
+        "How this activity's output informs, recommends, changes, or makes a decision."
+    ),
+    "autonomy": "Actions the system performs without a person deciding or approving each action.",
+    "human_oversight": "What a person can review, change, or stop during this activity.",
+    "jurisdiction": "The geographic or legal jurisdiction governing this activity.",
+    "data_categories": "The kinds of data this activity processes.",
+    "sensitive_attributes": "The sensitive attributes this activity processes.",
+    "potential_consequences": (
+        "Potential effects an incorrect result could have within the declared scope of this "
+        "activity, including the user's explicit declaration of no effect in that scope. "
+        "This describes inherent impact; it does not ask for controls, safeguards, or mitigations."
+    ),
+}
 _QUESTION_SYSTEM_PROMPT = """\
 You write one concise question for a bounded governance intake. Ask only about the named activity
-fact. The static question is a fallback reference, not a question to repeat mechanically. Earlier
-answers are context only; do not infer facts that they do not state.
+fact as defined in the prompt. The static question is a fallback reference, not a question to repeat
+mechanically. Earlier answers are context only; do not infer facts that they do not state. Do not
+turn an elicitation example into a new requirement or ask for risk controls when the named fact is
+about inherent impact.
 """
 _JUDGMENT_SYSTEM_PROMPT = """\
 You judge whether a candidate response supplies enough concrete information for the named activity
-fact. Return sufficient=true only when the fact is actually stated. If the response is vague,
-ambiguous, missing, or merely says that the fact is not needed, return sufficient=false. The fixed
-interview field is always required; you cannot mark it as unnecessary. Keep reason concise and
-factual, without hidden reasoning.
+fact. The canonical field definition is the sole requirement; the human-facing question is only
+elicitation context and may be imprecise or broader. Do not add a control or mitigation requirement
+to an inherent-risk field. Return sufficient=true only when the candidate response and the stated
+Run scope provide a concrete, scoped value for that fact. If the response is vague, ambiguous, or
+does not resolve the canonical fact, return sufficient=false. You are collecting the human's
+declaration, not checking whether you agree with it. An explicit scoped denial is a supplied fact,
+even if it contradicts a project-derived value. Do not demand an example of a consequence the human
+explicitly says does not occur, a numerical likelihood, or proof of zero risk. For example, 'None,
+this is exploration of a test dataset' and 'It has zero impact in this test' supply a declared
+consequence value; 'I do not know' leaves it unresolved. Record a contradiction in the short reason
+when relevant; risk assessment and policy must evaluate it independently. Do not invent an impact
+or production use. This judges intake completeness only: it does not lower risk,
+authorize the Run, or replace later policy and human review. Keep reason concise and factual,
+without hidden reasoning.
 """
 _FOLLOW_UP_SYSTEM_PROMPT = """\
-Write exactly one concise, directed follow-up question for a governance intake. Target the missing
-detail named by the sufficiency reason. Do not repeat the static question verbatim and do not claim
-that the field is unnecessary.
+Write exactly one concise, directed follow-up question for the canonical activity-profile fact
+named in the prompt. The prior question is elicitation context and cannot expand that fact. Read the
+full profile, current answer, and earlier question-answer turns on this field. Ask only for a new,
+still-unresolved detail that could make this same fact concrete. Do not assume production use, live
+credit approvals, adverse impacts, or a specific harm unless the human stated that it applies.
+Honor explicit scope limits. Do not ask for controls or mitigation measures when the field asks for
+inherent consequences; controls are assessed separately. Do not repeat a detail the human has
+already supplied or explicitly denied.
 """
 _MISSING_MARKERS = frozenset(
     {
@@ -134,7 +175,11 @@ def extract_facts(
     if model_context is None:
         return None, "fallback"
     _prepare_model_call(model_context, "extract")
-    wanted = "\n".join(f"- {field}: {questions[field]}" for field in missing)
+    wanted = "\n".join(
+        f"- {field}: {activity_fact_definition(field)}\n"
+        f"  Reference wording (not the field definition): {questions[field]}"
+        for field in missing
+    )
     prompt = (
         "Missing activity-profile fields (state only those the context settles):\n"
         f"{wanted}\n"
@@ -173,6 +218,7 @@ def generate_question(
     _prepare_model_call(model_context, "format")
     prompt = (
         f"Current activity-profile field: {field}\n"
+        f"Canonical activity-profile fact: {activity_fact_definition(field)}\n"
         f"Static fallback question: {static_question}\n"
         "Already answered fields:\n"
         f"{_profile_context(profile, fields=fields, exclude=field)}\n"
@@ -197,6 +243,8 @@ def judge_sufficiency(
     fields: tuple[str, ...],
     profile: ActivityProfile,
     model_context: RiskInterviewModelContext | None,
+    *,
+    current_request: str | None = None,
 ) -> tuple[SufficiencyJudgment | None, str]:
     """Judge one candidate answer, returning ``None`` when no reliable model result exists."""
     if model_context is None:
@@ -204,9 +252,13 @@ def judge_sufficiency(
     _prepare_model_call(model_context, "extract")
     prompt = (
         f"Required activity-profile field: {field}\n"
-        f"Required fact question: {question}\n"
-        "Other recorded fields:\n"
-        f"{_profile_context(profile, fields=fields, exclude=field)}\n"
+        f"Canonical activity-profile fact: {activity_fact_definition(field)}\n"
+        "Question shown to the human (context only):\n"
+        f"{question}\n"
+        "Current Run request:\n"
+        f"{current_request or ''}\n"
+        "Full current activity profile, including the value already recorded for this field:\n"
+        f"{_profile_context(profile, fields=fields, exclude='')}\n"
         "Candidate response:\n<<<\n"
         f"{answer}\n"
         ">>>\n"
@@ -235,6 +287,9 @@ def generate_follow_up(
     fields: tuple[str, ...],
     profile: ActivityProfile,
     model_context: RiskInterviewModelContext | None,
+    *,
+    current_request: str | None = None,
+    prior_question_answers: Sequence[Mapping[str, object]] = (),
 ) -> tuple[str, str]:
     """Write one directed follow-up question for an insufficient human answer."""
     fallback = (
@@ -246,11 +301,18 @@ def generate_follow_up(
     _prepare_model_call(model_context, "format")
     prompt = (
         f"Required activity-profile field: {field}\n"
-        f"Original question: {question}\n"
+        f"Canonical activity-profile fact: {activity_fact_definition(field)}\n"
+        "Previous human-facing question (context only):\n"
+        f"{question}\n"
         f"Human answer:\n<<<\n{answer}\n>>>\n"
         f"Sufficiency reason: {reason}\n"
-        "Already answered fields:\n"
-        f"{_profile_context(profile, fields=fields, exclude=field)}\n"
+        "Earlier question-answer turns for this field (bounded excerpts; omitted content is not "
+        "evidence of absence):\n"
+        f"{canonical_json(list(prior_question_answers))}\n"
+        "Current Run request:\n"
+        f"{current_request or ''}\n"
+        "Full current activity profile, including the value already recorded for this field:\n"
+        f"{_profile_context(profile, fields=fields, exclude='')}\n"
         "Write one directed follow-up question."
     )
     try:
@@ -265,11 +327,16 @@ def generate_follow_up(
     return (follow_up, "model") if follow_up else (fallback, "fallback")
 
 
-def _prepare_model_call(model_context: RiskInterviewModelContext, task: str) -> ModelChoice:
+def _prepare_model_call(
+    model_context: RiskInterviewModelContext,
+    task: str,
+    *,
+    role: Role = Role.AGENT,
+) -> ModelChoice:
     """Run the same selection and pre-call audit hooks used by risk classification."""
     if model_context.before_model_selection is not None:
         model_context.before_model_selection()
-    choice = choose(Role.AGENT, task)
+    choice = choose(role, task)
     model_context.event_log.append(
         EventType.MODEL_SELECTED,
         Actor.system(),
@@ -310,6 +377,28 @@ def _record_structured_failure(model_context: RiskInterviewModelContext, error: 
         model_context.record_model_usage(error.response)
 
 
+def prepare_interview_model_call(
+    model_context: RiskInterviewModelContext,
+    task: str,
+    *,
+    role: Role = Role.AGENT,
+) -> ModelChoice:
+    """Route and record a shared bounded interview-model call for its provider role."""
+    return _prepare_model_call(model_context, task, role=role)
+
+
+def instrumented_interview_provider(model_context: RiskInterviewModelContext) -> LLMProvider:
+    """Return the request-ledger-instrumented provider used by all interview model calls."""
+    return _instrumented_provider(model_context)
+
+
+def record_interview_structured_failure(
+    model_context: RiskInterviewModelContext, error: Exception
+) -> None:
+    """Record usage returned with a structured response rejected by validation."""
+    _record_structured_failure(model_context, error)
+
+
 def _profile_context(profile: ActivityProfile, *, fields: tuple[str, ...], exclude: str) -> str:
     """Render already declared profile facts as bounded model prompt context."""
     lines: list[str] = []
@@ -329,6 +418,14 @@ def normalise(value: str) -> str:
     decomposed = unicodedata.normalize("NFKD", value.casefold())
     unaccented = "".join(char for char in decomposed if not unicodedata.combining(char))
     return " ".join(re.sub(r"[\W_]+", " ", unaccented).split())
+
+
+def activity_fact_definition(field: str) -> str:
+    """Return the canonical meaning of one fixed activity-profile field."""
+    try:
+        return _ACTIVITY_FACT_DEFINITIONS[field]
+    except KeyError as exc:
+        raise ValueError(f"unknown activity-profile field {field!r}") from exc
 
 
 def is_missing_text(value: str) -> bool:
@@ -352,11 +449,15 @@ __all__ = [
     "FactExtraction",
     "RiskInterviewModelContext",
     "SufficiencyJudgment",
+    "activity_fact_definition",
     "extract_facts",
     "generate_follow_up",
     "generate_question",
     "has_declared_value",
+    "instrumented_interview_provider",
     "is_missing_text",
     "judge_sufficiency",
     "normalise",
+    "prepare_interview_model_call",
+    "record_interview_structured_failure",
 ]

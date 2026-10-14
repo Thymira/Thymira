@@ -20,7 +20,7 @@ from thymira.schemas import (
     Task,
     ThymiraModel,
 )
-from thymira.thy.models import ReworkSignal, ThyProgress
+from thymira.thy.models import ReworkSignal, ThyPlanReview, ThyProgress
 
 
 class RunGraphState(TypedDict):
@@ -63,6 +63,8 @@ class RuntimeState(ThymiraModel):
     thy_progress: ThyProgress | None = None
     """THY's own record of a pass that stopped on a tool call awaiting a human, carried under
     THY's name into the next `thy` pass and cleared when a pass finishes."""
+    thy_plan_review: ThyPlanReview | None = None
+    """Unapproved THY candidate kept apart from the executable plan and tool progress."""
 
 
 def initial_graph_state(run: Run) -> RunGraphState:

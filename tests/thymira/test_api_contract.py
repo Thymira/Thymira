@@ -76,6 +76,7 @@ from thymira.schemas import (
     TaskStatus,
     new_id,
 )
+from thymira.schemas.tool_runtime import ToolRuntimeStatus
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -227,6 +228,15 @@ def _extract_operations(app: FastAPI) -> dict[tuple[str, str], tuple[int, str | 
 # must update this table in the same change, which is the point of a contract suite.
 _EXPECTED_OPERATIONS: dict[tuple[str, str], tuple[int, str | None]] = {
     ("GET", "/healthz"): (200, None),
+    ("POST", "/sessions"): (201, "Session"),
+    ("GET", "/sessions"): (200, "SessionPage"),
+    ("GET", "/sessions/{session_id}"): (200, "SessionConversation"),
+    ("POST", "/sessions/{session_id}/messages"): (201, "ConversationTurn"),
+    ("POST", "/sessions/{session_id}/chat"): (201, "SessionDiscussion"),
+    ("POST", "/sessions/{session_id}/chat/{discussion_id}/retry"): (200, "SessionDiscussion"),
+    ("GET", "/project/files"): (200, "ProjectFileList"),
+    ("GET", "/project/file"): (200, "ProjectFileContent"),
+    ("PUT", "/project/file"): (200, "ProjectFileContent"),
     ("POST", "/runs"): (201, "Run"),
     ("GET", "/runs"): (200, "RunPage"),
     ("GET", "/runs/{run_id}"): (200, "Run"),
@@ -238,6 +248,7 @@ _EXPECTED_OPERATIONS: dict[tuple[str, str], tuple[int, str | None]] = {
     ("POST", "/runs/{run_id}/resume"): (202, "Run"),
     ("POST", "/runs/{run_id}/cancel"): (202, "Run"),
     ("POST", "/runs/{run_id}/risk-interview"): (202, "RiskInterviewResponse"),
+    ("POST", "/runs/{run_id}/risk-interview/clarify"): (202, "RiskInterviewResponse"),
     ("POST", "/runs/{run_id}/approve"): (202, "Run"),
     ("POST", "/runs/{run_id}/reject"): (202, "Run"),
     ("GET", "/runs/{run_id}/events"): (200, None),  # response_model=None: JSON page or SSE.
@@ -254,6 +265,7 @@ _EXPECTED_OPERATIONS: dict[tuple[str, str], tuple[int, str | None]] = {
     ("GET", "/settings/{namespace}"): (200, "SettingsSnapshot"),
     ("PUT", "/settings/{namespace}"): (200, "SettingsSnapshot"),
     ("GET", "/tools"): (200, "ToolListResponse"),
+    ("GET", "/tools/runtime-status"): (200, "ToolRuntimeStatus"),
     ("GET", "/tools/{name}"): (200, "ToolDescriptor"),
     ("GET", "/project/context"): (200, "ProjectContextResponse"),
     ("PUT", "/project/context"): (200, "ProjectContextResponse"),
@@ -308,6 +320,11 @@ _RUN_SCOPED_OPERATIONS: tuple[tuple[str, str, dict[str, object] | None], ...] = 
     ("POST", "/runs/{run_id}/cancel", None),
     ("GET", "/runs/{run_id}/risk-interview", None),
     ("POST", "/runs/{run_id}/risk-interview", {"answer": "Credit applicants."}),
+    (
+        "POST",
+        "/runs/{run_id}/risk-interview/clarify",
+        {"field": "decision_effect", "expected_decision_id": new_id("decision")},
+    ),
     ("POST", "/runs/{run_id}/approve", {}),
     ("POST", "/runs/{run_id}/reject", {}),
     ("GET", "/runs/{run_id}/events", None),
@@ -596,3 +613,17 @@ def test_delegate_and_tools_routes_conform_to_their_response_schema(tmp_path: Pa
     assert tools.items
     assert fetched.status_code == 200
     assert ToolDescriptor.model_validate(fetched.json()).name == tools.items[0].name
+
+
+def test_runtime_prerequisites_are_typed_read_only_and_authenticated(tmp_path, monkeypatch):
+    monkeypatch.setattr("shutil.which", lambda _name: None)
+    monkeypatch.setenv("THYMIRA_SANDBOX", "container")
+    client, _ = _client(tmp_path)
+    response = client.get("/tools/runtime-status")
+    assert response.status_code == 200
+    status = ToolRuntimeStatus.model_validate(response.json())
+    assert status.code == "docker_missing"
+    assert status.status == "unavailable"
+    assert client.get("/runs").json()["items"] == []
+    client.headers.pop("Authorization", None)
+    assert client.get("/tools/runtime-status").status_code == 401

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -10,29 +10,37 @@ from thymira.agents.route_policy import record_model_route_policy_snapshot
 from thymira.agents.settlement import finalize_parked_invocation
 from thymira.core.control_plane import RunController, RunEventLog
 from thymira.core.dispatch import ExecutionDispatchError
-from thymira.core.execution_review import (
-    EXECUTION_START_RESUME_TARGET,
-    block_rejected_execution,
-    continuation_target,
-    human_approval_outcome,
-    parked_review_decision,
-    pending_review_decision,
-    review_resume_target,
-    validate_execution_resolver,
+from thymira.core.human_review import (
+    RunApprovalDependencies,
+    RunApprovalError,
+    RunNotAwaitingApprovalError,
+    resolve_run_approval,
 )
-from thymira.core.governance_binding import final_governance_binding, policy_decision_binding
 from thymira.core.lifecycle_worker import (
     ControlInputConsumer,
     GoalBoardCommandConsumer,
     LifecycleOwnerLoop,
 )
-from thymira.core.provenance import capture_run_environment
+from thymira.core.plan_review import PlanReviewError, validate_current_plan_review
+from thymira.core.provenance import RunEnvironment, capture_run_environment
 from thymira.core.risk_interview import RiskInterviewNotPendingError, RiskInterviewService
+from thymira.core.run_resume import (
+    RunInformationRequiredError,
+    RunNotResumableError,
+    RunResumeDependencies,
+    prepare_run_resume,
+)
 from thymira.core.run_state import RunStage, RunTransitionKind
+from thymira.core.runtime_identity import (
+    RuntimeIdentity,
+    observe_runtime_identity,
+    process_runtime_identity,
+)
 from thymira.core.sessions import SessionNotFoundError
 from thymira.events import canonical_json, sha256_text
 from thymira.schemas import (
     Actor,
+    ConversationInput,
     EventType,
     Id,
     JsonObject,
@@ -51,9 +59,12 @@ from thymira.schemas import (
 from thymira.schemas import (
     RunStage as SchemaRunStage,
 )
+from thymira.state import OwnerBusyError
 
 if TYPE_CHECKING:
     from datetime import datetime
+
+    from pydantic import BaseModel
 
     from thymira.core.audit_freshness import AuditFreshnessService
     from thymira.core.dispatch import ExecutionDispatcher
@@ -65,28 +76,27 @@ HashProvider = Callable[[], str]
 HASH_LENGTH = 64
 
 
+def _capture_run_environment_for_service(
+    *,
+    cwd: Path,
+    runtime_identity: RuntimeIdentity,
+    runtime_schemas: Sequence[type[BaseModel]] | None,
+) -> RunEnvironment:
+    """Attach one immutable startup identity and an in-memory continuation observation."""
+    observation = observe_runtime_identity(runtime_identity, schemas=runtime_schemas)
+    return capture_run_environment(
+        cwd=cwd,
+        runtime_identity=runtime_identity,
+        runtime_observation=observation,
+    )
+
+
 class RunNotFoundError(LookupError):
     """Raised when a requested Run does not exist in the local store."""
 
 
-class RunNotResumableError(RuntimeError):
-    """Raised when a Run cannot be continued by the configured execution dispatcher."""
-
-
 class RunAuditStaleError(RuntimeError):
     """Raised when a continuation would reuse an obsolete audit snapshot."""
-
-
-class RunApprovalError(ValueError):
-    """Base error for an invalid human decision request."""
-
-
-class RunNotAwaitingApprovalError(RunApprovalError):
-    """Raised when a human decision targets a Run without a pending approval."""
-
-
-class RunInformationRequiredError(RunApprovalError):
-    """Raised when a Run must receive its pending activity-profile answer before resuming."""
 
 
 class RunService:
@@ -104,6 +114,8 @@ class RunService:
         gate_factory: Callable[[Id], Gate] | None = None,
         audit_freshness: AuditFreshnessService | None = None,
         lifecycle_repository: LifecycleRepository | None = None,
+        runtime_identity: RuntimeIdentity | None = None,
+        runtime_schemas: Sequence[type[BaseModel]] | None = None,
     ) -> None:
         self._store = store
         self._sessions = sessions
@@ -115,6 +127,10 @@ class RunService:
         self._gate_factory = gate_factory
         self._audit_freshness = audit_freshness
         self._lifecycle = lifecycle_repository
+        self._runtime_identity = (
+            process_runtime_identity() if runtime_identity is None else runtime_identity
+        )
+        self._runtime_schemas = runtime_schemas
 
     def create_run(
         self,
@@ -127,6 +143,7 @@ class RunService:
         dispatch: bool = True,
         idempotency_key: str | None = None,
         request_binding_sha256: str | None = None,
+        conversation: ConversationInput | None = None,
         project_id: Id | None = None,
         session_client: str = "runtime",
     ) -> Run:
@@ -147,6 +164,7 @@ class RunService:
                 dispatch=dispatch,
                 idempotency_key=idempotency_key,
                 request_binding_sha256=request_binding_sha256,
+                conversation=conversation,
                 project_id=project_id,
                 session_client=session_client,
             )
@@ -158,12 +176,17 @@ class RunService:
         # Provenance is captured before the Run is built, not after, so the commit it ran from
         # reaches the record itself and not only the creation event's payload. Outside a
         # repository `available` is False and the field simply stays unset.
-        environment = capture_run_environment(cwd=Path(workspace))
+        environment = _capture_run_environment_for_service(
+            cwd=Path(workspace),
+            runtime_identity=self._runtime_identity,
+            runtime_schemas=self._runtime_schemas,
+        )
         run = Run(
             id=new_id("run"),
             project_id=session.project_id,
             session_id=session.id,
             prompt=prompt,
+            conversation=conversation,
             git_commit=environment.source_control.commit,
             # A resumed Run must use this creation-time identity even when its Session row is
             # later replaced by a repository writer or the live router configuration changes.
@@ -209,6 +232,7 @@ class RunService:
         dispatch: bool = True,
         idempotency_key: str | None = None,
         request_binding_sha256: str | None = None,
+        conversation: ConversationInput | None = None,
         project_id: Id | None = None,
         session_client: str = "runtime",
         session_draft: Session | None = None,
@@ -232,12 +256,17 @@ class RunService:
             idempotency_key=idempotency_key,
             session_draft=session_draft,
         )
-        environment = capture_run_environment(cwd=Path(workspace))
+        environment = _capture_run_environment_for_service(
+            cwd=Path(workspace),
+            runtime_identity=self._runtime_identity,
+            runtime_schemas=self._runtime_schemas,
+        )
         run = Run(
             id=new_id("run"),
             project_id=session.project_id,
             session_id=session.id,
             prompt=prompt,
+            conversation=conversation,
             git_commit=environment.source_control.commit,
             # Mirrors create_run: a resumed Run must use this creation-time identity even when its
             # Session row is later replaced by a repository writer or the live router
@@ -259,6 +288,7 @@ class RunService:
             session_id=session.id,
             project_id=session.project_id,
             prompt=prompt,
+            conversation=conversation,
             workspace=Path(workspace),
             session_client=session_client,
             creation_payload=cast("dict[str, object]", creation_payload),
@@ -364,6 +394,17 @@ class RunService:
         """Compatibility alias for :meth:`get_run`."""
         return self.get_run(run_id)
 
+    def get_run_state(self, run_id: Id) -> RunState:
+        """Return the authoritative composite lifecycle state for ``run_id``."""
+        self.get_run(run_id)
+        return self._controller.current_state(run_id).state
+
+    def recover_session_publications(self, session_id: Id) -> tuple[PublicationReceipt, ...]:
+        """Recover only staged publications for ``session_id`` when lifecycle storage is active."""
+        if self._lifecycle is None:
+            return ()
+        return self._lifecycle.recover_publications(session_id=session_id)
+
     def controller_for_owner(self, live_owner: RunHandle) -> RunController:
         """Return a transition controller whose writes require this live owner handle.
 
@@ -416,71 +457,49 @@ class RunService:
     def resume(self, run_id: Id, *, actor: Actor) -> Run:
         """Continue a Run from its latest verified checkpoint without replaying completed work.
 
-        Terminal Runs are idempotent no-ops.  Every non-terminal continuation verifies the
-        authoritative event chain before any transition or dispatcher call is made.
+        Serialize publication recovery and the state transition with human answers. Dispatch
+        after releasing the review lock so the next checkpoint can accept another answer.
         """
-        run = self.get_run(run_id)
-        current = self._controller.current_state(run_id)
-        if current.condition.value == "terminal":
-            return run
-        _refuse_active_resume(run_id, current.condition)
-        if self._dispatcher is None:
-            raise RunNotResumableError("no execution dispatcher is configured")
-        parked: PolicyDecision | None = None
-        if (
-            current.condition.value == "waiting"
-            and current.wait_reason is not None
-            and current.wait_reason.value == "approval"
-        ):
-            parked = self._parked_decision(run_id)
-            target = (
-                review_resume_target(self._store.events(run_id), parked.id)
-                if parked is not None
-                else None
-            )
-            # A park that persisted its target (an execution start, the interview's question
-            # limit) answers a plain resume from its recorded human outcome: still unanswered
-            # refuses, a rejection blocks. Otherwise an out-of-band rejection would be
-            # discarded here and the interview would re-escalate the same review forever.
-            if target is not None and parked is not None:
-                outcome = human_approval_outcome(self._store.events(run_id), parked)
-                if outcome is None:
-                    raise RunNotAwaitingApprovalError(
-                        f"run {run_id!r} is waiting for human approval"
-                    )
-                if outcome is False:
-                    block_rejected_execution(
-                        self._controller, run_id, self._store.events(run_id), parked, actor
-                    )
-                    return self.get_run(run_id)
-            elif self._pending_approval(run_id) is not None:
-                raise RunNotAwaitingApprovalError(f"run {run_id!r} is waiting for human approval")
-        self._enforce_audit_freshness(run_id, parked_decision=parked)
-        if current.condition.value == "waiting" and current.wait_reason is not None:
-            if current.wait_reason.value == "information" and (
-                self._risk_interview is None or self._risk_interview.has_pending_question(run_id)
-            ):
-                raise RunInformationRequiredError(
-                    f"run {run_id!r} is waiting for an activity-profile answer"
+        try:
+            with self._store.review_lock(run_id):
+
+                def check_plan_review(target_run_id: Id, decision: PolicyDecision) -> None:
+                    if self._gate_factory is None:
+                        raise RunNotResumableError(
+                            "plan approval cannot be resumed without the current policy"
+                        )
+                    try:
+                        validate_current_plan_review(
+                            self._store.events(target_run_id),
+                            self.get_run(target_run_id),
+                            decision,
+                            policy_sha256=self._gate_factory(target_run_id).engine.policy_sha256,
+                        )
+                    except PlanReviewError as exc:
+                        raise RunNotResumableError(
+                            "plan review changed before the Run could resume"
+                        ) from exc
+
+                dependencies = RunResumeDependencies(
+                    controller=self._controller,
+                    read_events=self._store.events,
+                    interview=self._risk_interview,
+                    dispatcher_available=self._dispatcher is not None,
+                    check_audit=lambda target_id, parked: self._enforce_audit_freshness(
+                        target_id, parked_decision=parked
+                    ),
+                    check_plan_review=check_plan_review,
                 )
-            payload: dict[str, Any] = {"resumed_by": actor.to_json_dict()}
-            if current.wait_reason.value == "information":
-                # No pending interview question: MIRA's preflight parked the Run on its own
-                # uncertain inherent-risk judgement (`MiraSubgraph._request_human_context`), which
-                # `answer` has nothing to resolve. Re-entering preflight is the only way forward.
-                payload["resume_from"] = "information"
-            elif current.wait_reason.value == "approval":
-                # Answered out of band: re-enter where the Run was parked. A tool-call review
-                # parked it inside `thy`; a findings review parked it at `gate`.
-                payload["resume_from"] = continuation_target(self._store.events(run_id), parked)
-            self._controller.advance(run_id, RunTransitionKind.RESUME, payload=payload)
-        elif current.condition.value == "paused":
-            self._controller.advance(
-                run_id,
-                RunTransitionKind.RESUME,
-                payload={"resumed_by": actor.to_json_dict()},
-            )
-        self._resume_or_fail(self._dispatcher, run_id)
+                should_dispatch = prepare_run_resume(self.get_run(run_id), actor, dependencies)
+        except OwnerBusyError as exc:
+            raise RunNotResumableError(
+                "another review or answer for this Run is already being resolved"
+            ) from exc
+        except FileNotFoundError as exc:
+            raise RunNotFoundError(f"run {run_id!r} was not found") from exc
+        if should_dispatch:
+            assert self._dispatcher is not None  # noqa: S101  # checked before transition.
+            self._resume_or_fail(self._dispatcher, run_id)
         return self.get_run(run_id)
 
     def cancel(self, run_id: Id, *, actor: Actor, reason: str | None = None) -> Run:
@@ -520,34 +539,92 @@ class RunService:
         self._controller.advance(run_id, RunTransitionKind.CANCEL, payload=payload)
         return self.get_run(run_id)
 
-    def answer_risk_interview(self, run_id: Id, *, answer: str, actor: Actor) -> Run:
-        """Persist one pending activity-profile answer and resume from its interview checkpoint."""
-        run = self.get_run(run_id)
-        current = self._controller.current_state(run_id)
-        if (
-            current.condition.value != "waiting"
-            or current.wait_reason is None
-            or current.wait_reason.value != "information"
-        ):
-            message = f"run {run_id!r} is not awaiting activity information"
-            raise RunInformationRequiredError(message)
+    def answer_risk_interview(
+        self,
+        run_id: Id,
+        *,
+        answer: str,
+        actor: Actor,
+        expected_question_id: str | None = None,
+    ) -> Run:
+        """Persist one exact pending profile answer and resume from its interview checkpoint."""
         if self._risk_interview is None:
             raise RunNotResumableError("no risk-interview service is configured")
         if self._dispatcher is None:
             raise RunNotResumableError("no execution dispatcher is configured")
+        should_dispatch = False
         try:
-            self._risk_interview.answer(run, answer=answer, actor=actor)
+            with self._store.review_lock(run_id):
+                run = self.get_run(run_id)
+                current = self._controller.current_state(run_id)
+                if (
+                    current.condition.value != "waiting"
+                    or current.wait_reason is None
+                    or current.wait_reason.value != "information"
+                ):
+                    message = f"run {run_id!r} is not awaiting activity information"
+                    raise RunInformationRequiredError(message)
+                self._risk_interview.answer(
+                    run,
+                    answer=answer,
+                    actor=actor,
+                    expected_question_id=expected_question_id,
+                )
+                updated = self._controller.current_state(run_id)
+                if (
+                    updated.condition is RunCondition.WAITING
+                    and updated.wait_reason is not None
+                    and updated.wait_reason.value == "information"
+                ):
+                    self._controller.advance(
+                        run_id,
+                        RunTransitionKind.RESUME,
+                        payload={
+                            "answered_by": actor.to_json_dict(),
+                            "resume_from": "information",
+                        },
+                    )
+                    should_dispatch = True
+        except OwnerBusyError as exc:
+            raise RunInformationRequiredError(
+                "another review or clarification for this Run is already being resolved"
+            ) from exc
         except RiskInterviewNotPendingError as exc:
             raise RunInformationRequiredError(str(exc)) from exc
-        self._controller.advance(
-            run_id,
-            RunTransitionKind.RESUME,
-            payload={
-                "answered_by": actor.to_json_dict(),
-                "resume_from": "information",
-            },
-        )
-        self._resume_or_fail(self._dispatcher, run_id)
+        except FileNotFoundError as exc:
+            raise RunNotFoundError(f"run {run_id!r} was not found") from exc
+        if should_dispatch:
+            self._resume_or_fail(self._dispatcher, run_id)
+        return self.get_run(run_id)
+
+    def clarify_risk_interview(
+        self,
+        run_id: Id,
+        *,
+        field: str,
+        expected_decision_id: str,
+        actor: Actor,
+    ) -> Run:
+        """Replace the exact active planning risk review with a Gate-authorized question."""
+        if self._risk_interview is None:
+            raise RunNotResumableError("no risk-interview service is configured")
+        try:
+            with self._store.review_lock(run_id):
+                run = self.get_run(run_id)
+                self._risk_interview.clarify_field(
+                    run,
+                    field=field,
+                    expected_decision_id=expected_decision_id,
+                    actor=actor,
+                )
+        except OwnerBusyError as exc:
+            raise RunInformationRequiredError(
+                "another approval or clarification for this Run is already being resolved"
+            ) from exc
+        except (RiskInterviewNotPendingError, ValueError) as exc:
+            raise RunInformationRequiredError(str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise RunNotFoundError(f"run {run_id!r} was not found") from exc
         return self.get_run(run_id)
 
     def resolve_approval(
@@ -557,6 +634,7 @@ class RunService:
         gate: Gate,
         actor: Actor,
         note: str | None = None,
+        expected_decision_id: str | None = None,
     ) -> Run:
         """Resolve a pending Gate review and continue or block the Run accordingly.
 
@@ -567,76 +645,38 @@ class RunService:
         rejection blocks it. A tool-call review decides one call inside an unfinished THY pass, so
         either answer resumes execution instead.
         """
-        self.get_run(run_id)
-        current = self._controller.current_state(run_id)
-        if (
-            current.condition.value != "waiting"
-            or current.wait_reason is None
-            or current.wait_reason.value != "approval"
-        ):
-            raise RunNotAwaitingApprovalError(f"run {run_id!r} is not awaiting human approval")
-        decision = self._parked_decision(run_id) or self._pending_approval(run_id)
-        if decision is None:
-            raise RunNotAwaitingApprovalError(f"run {run_id!r} has no pending approval")
-        resume_target = review_resume_target(self._store.events(run_id), decision.id)
-        if resume_target == EXECUTION_START_RESUME_TARGET:
-            try:
-                validate_execution_resolver(gate, actor)
-            except ValueError as exc:
-                raise RunApprovalError(str(exc)) from exc
-        self._enforce_audit_freshness(run_id, gate=gate, parked_decision=decision)
-        approved = gate.resolve_pending_approval(decision, note=note)
-        if (
-            resume_target == EXECUTION_START_RESUME_TARGET
-            and human_approval_outcome(self._store.events(run_id), decision) is not approved
-        ):
-            raise RunApprovalError("Gate did not record this human answer")
-        if decision.subject_kind == "tool_call":
-            # A tool-call review parks the Run mid-execution. Either answer resumes it: an
-            # approval lets the Tool Manager run that exact call once (its ticket), a rejection
-            # is recorded as a denial the agent adapts to. Neither ends the Run -- only the
-            # findings review below can block it.
-            self._controller.advance(
-                run_id,
-                RunTransitionKind.RESUME,
-                payload={
-                    ("approved_by" if approved else "rejected_by"): actor.to_json_dict(),
-                    "approved": approved,
-                    "resume_from": "execution",
-                },
+
+        def check_audit_freshness(target_run_id: Id, decision: PolicyDecision) -> None:
+            self._enforce_audit_freshness(
+                target_run_id,
+                gate=gate,
+                parked_decision=decision,
             )
-            if self._dispatcher is not None:
-                self._resume_or_fail(self._dispatcher, run_id)
-            return self.get_run(run_id)
-        if approved:
-            self._controller.advance(
-                run_id,
-                RunTransitionKind.RESUME,
-                payload={
-                    "approved_by": actor.to_json_dict(),
-                    "resume_from": resume_target or "approval",
-                },
-            )
-            if self._dispatcher is not None:
-                self._resume_or_fail(self._dispatcher, run_id)
-        else:
-            payload: dict[str, Any] = {
-                "rejected_by": actor.to_json_dict(),
-                **policy_decision_binding(decision),
-            }
-            if decision.subject_kind == "findings":
-                payload.update(
-                    final_governance_binding(
-                        run_id,
-                        decision,
-                        self._store.events(run_id),
-                    )
+
+        dependencies = RunApprovalDependencies(
+            controller=self._controller,
+            read_events=self._store.events,
+            read_run=self.get_run,
+            check_audit_freshness=check_audit_freshness,
+        )
+        try:
+            with self._store.review_lock(run_id):
+                should_dispatch = resolve_run_approval(
+                    dependencies,
+                    run_id,
+                    gate=gate,
+                    actor=actor,
+                    note=note,
+                    expected_decision_id=expected_decision_id,
                 )
-            self._controller.advance(
-                run_id,
-                RunTransitionKind.BLOCK,
-                payload=payload,
-            )
+        except OwnerBusyError as exc:
+            raise RunApprovalError(
+                "another approval for this Run is already being resolved"
+            ) from exc
+        except FileNotFoundError as exc:
+            raise RunNotFoundError(f"run {run_id!r} was not found") from exc
+        if should_dispatch and self._dispatcher is not None:
+            self._resume_or_fail(self._dispatcher, run_id)
         return self.get_run(run_id)
 
     def _enforce_audit_freshness(
@@ -796,32 +836,6 @@ class RunService:
                 "create_run requires policy_sha256 and graph_definition_hash providers"
             )
 
-    def _pending_approval(self, run_id: Id) -> PolicyDecision | None:
-        """Return the latest unresolved human-review decision for a verified Run.
-
-        An answer names its decision under either recorded field name (the frozen
-        ``Approval.policy_decision_id`` on the control-plane path, ``decision_id`` on the Gate's
-        own), so the resolved set is folded through
-        :func:`~thymira.schemas.approval_decision_id`. Reading one name only left a Run a human
-        had really approved reporting as still waiting, and :meth:`resume` refused it forever.
-        """
-        return pending_review_decision(self._store.events(run_id), run_id)
-
-    def _parked_decision(self, run_id: Id) -> PolicyDecision | None:
-        """The decision the Run was last parked on, read off its own ``wait_for_approval``.
-
-        The single record behind both the branch a resume takes and the review an answer
-        resolves. Reading the *latest pending* decision instead let a second review recorded
-        after the park take the answer meant for it: the parked review stayed unanswered, and a
-        run-level one even sent the resume to the wrong node. ``None`` when the Run names no
-        decision this method can read -- either it holds no ``wait_for_approval`` transition at
-        all, or the latest one carries no ``policy_decision`` mapping (a park written before the
-        record existed) -- which leaves :meth:`_pending_approval` as the fallback. A
-        ``policy_decision`` that *is* a mapping but does not validate is a corrupt record, not a
-        missing one, and raises.
-        """
-        return parked_review_decision(self._store.events(run_id), run_id)
-
     @staticmethod
     def _resolve_hash(value: str | HashProvider | None) -> str:
         """Resolve and validate one content hash."""
@@ -851,12 +865,6 @@ def _command_for_status(stage: RunStage, status: RunStatus) -> RunTransitionKind
         raise ValueError(
             f"run transition cannot advance from {stage.value} to compatibility status {status}"
         ) from exc
-
-
-def _refuse_active_resume(run_id: Id, condition: RunCondition) -> None:
-    """Prevent a second dispatcher from racing the owner of an active Run."""
-    if condition is RunCondition.ACTIVE:
-        raise RunNotResumableError(f"run {run_id!r} is already active")
 
 
 def _status_for_state(state: RunState) -> RunStatus:
@@ -889,6 +897,7 @@ def _creation_request_digest(
     session_id: Id,
     project_id: Id,
     prompt: str,
+    conversation: ConversationInput | None,
     workspace: Path,
     session_client: str,
     creation_payload: dict[str, object],
@@ -908,7 +917,10 @@ def _creation_request_digest(
                 "actor": actor.to_json_dict(),
                 "session_id": session_id,
                 "project_id": project_id,
-                "prompt": prompt,
+                # Conversation prompts contain a fresh nonce-bound frame on every retry. The
+                # immutable input metadata is the stable request body and context binding.
+                "prompt": conversation.message if conversation is not None else prompt,
+                "conversation": (conversation.to_json_dict() if conversation is not None else None),
                 "workspace": str(workspace.resolve()),
                 "session_client": session_client,
                 "creation_payload": request_payload,

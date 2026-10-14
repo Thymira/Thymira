@@ -63,7 +63,7 @@ PDF bytes any other way. A task that asks only for training and tracked metrics 
 this.
 
 
-Check the [exit code: N] marker on every run_python result; investigate a failure before moving on. Each call runs in a fresh interpreter: write files for anything the next call needs, and keep printed output short — long output is truncated.
+Check the [exit code: N] marker on every run_python result; investigate a failure before moving on. For a saved script, pass source_artifact_id from write_file(kind=code). The runtime executes that registered revision; a filename is not an artifact ID. Do not send code again alongside the reference. Corrected scripts need a newly registered ID. Syntax is checked before approval and errors identify the line and column. Use actual line breaks between statements; a literal `\n` outside a string is not a line break. Escapes inside quoted strings are preserved. Keep source within 100000 UTF-8 bytes and 10000 lines. Each call runs in a fresh interpreter: write files for anything the next call needs, and keep printed output short — long output is truncated. For data-dependent files, append descriptors after each save in the script and write the list as JSON at a fresh output_manifest_path. Pass that path instead of guessing output_artifacts. Publication is atomic; a missing declared file with exit code 0 is a publication mismatch, not a Python execution error. Read the reported paths and fix the declarations, not unrelated working code. Never read PNGs as text.
 
 Use the run_experiment tool to train a baseline on a registered dataset; report only the metrics it returns, never a number you have not seen in its output.
 

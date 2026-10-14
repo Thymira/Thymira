@@ -40,7 +40,9 @@ from thymira.agents import (
 from thymira.agents.llm import LLMConfigurationError, provider_for
 from thymira.agents.llm.routing import UNCONFIGURED_MODEL, ModelChoice, Role, choose
 from thymira.core.control_plane import MiraControlPlane, RunController, RunEventLog
-from thymira.core.execution_review import RISK_UNCERTAINTY_RESUME_TARGET, reviewed_risk_profile
+from thymira.core.conversation_response import record_conversation_response
+from thymira.core.execution_review import human_approval_outcome, reviewed_risk_profile
+from thymira.core.graph.agent_catalog import default_thy_catalog
 from thymira.core.graph.checkpoint import StateCheckpointer
 from thymira.core.graph.compose import build_runtime_graph
 from thymira.core.graph.compose import graph_definition_hash as _compose_graph_definition_hash
@@ -51,7 +53,17 @@ from thymira.core.graph.risk_reconciliation import (
     risk_uncertainty_review_resolved,
 )
 from thymira.core.graph.state import initial_runtime_state
+from thymira.core.plan_review import (
+    PlanReviewError,
+    plan_review_execution_context,
+    plan_review_from_events,
+    unparked_plan_review_from_events,
+    validate_plan_review_scope,
+)
+from thymira.core.risk_clarification import clarification_field_for_missing_information
 from thymira.core.risk_interview import RiskInterviewModelContext
+from thymira.core.risk_review_requests import request_uncertainty_review
+from thymira.core.runtime_identity import runtime_catalog_snapshot
 from thymira.core.usage import UsageLedgerRegistry
 from thymira.events import canonical_json, sha256_text
 from thymira.mira.agents import load_default_specs, load_mira_skill_catalog
@@ -81,8 +93,6 @@ from thymira.observability import agent as agent_observation
 from thymira.observability import score_run, update_current
 from thymira.policies import RiskProfile
 from thymira.schemas import (
-    ActionIntent,
-    ActionKind,
     ActivityProfile,
     Actor,
     AuditFinding,
@@ -92,19 +102,13 @@ from thymira.schemas import (
     ModelRoutePolicy,
     PackBinding,
     RiskAssessment,
-    RunCondition,
     TerminalAuditBinding,
     TurnEnded,
-    WaitReason,
+    approval_names_decision,
     new_id,
     utc_now,
 )
 from thymira.state import LifecycleError, OwnedArtifactStore, OwnedCheckpointRepository
-from thymira.thy.agents import (
-    coding_agent_catalog,
-    data_agent_catalog,
-    experiment_agent_catalog,
-)
 from thymira.thy.context import load_project_context
 from thymira.thy.graph import graph_definition_hash as _thy_graph_definition_hash
 from thymira.thy.graph import run_thy
@@ -112,14 +116,13 @@ from thymira.thy.models import ThyInput, ThyState
 from thymira.tools import BudgetRefusal, ToolContext
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Mapping, Sequence
     from contextlib import AbstractContextManager
     from datetime import datetime
 
     from langgraph.graph.state import CompiledStateGraph
     from pydantic import BaseModel
 
-    from thymira.agents import AgentSpec
     from thymira.agents.llm.base import LLMProvider, LLMResponse
     from thymira.core.dispatch import GraphFactory
     from thymira.core.graph.state import RuntimeState
@@ -154,6 +157,7 @@ if TYPE_CHECKING:
         RecordRepository,
         RunHandle,
     )
+    from thymira.thy.models import ThyPlanReview
     from thymira.tools import ToolManager, ToolRegistry
 
     type AuditAgentRunner = Callable[
@@ -168,9 +172,16 @@ class _LifecycleGraphFactory:
         self,
         builder: Callable[[Run], CompiledStateGraph],
         terminal_auditor: Callable[[RunHandle, WorkItem, WorkResult, TerminalAuditBinding], None],
+        *,
+        runtime_catalog_snapshot: Mapping[str, object],
+        runtime_schemas: tuple[type[BaseModel], ...],
+        runtime_catalog_unavailable_reason: str | None = None,
     ) -> None:
         self._builder = builder
         self.audit_terminal = terminal_auditor
+        self.runtime_catalog_snapshot = runtime_catalog_snapshot
+        self.runtime_schemas = runtime_schemas
+        self.runtime_catalog_unavailable_reason = runtime_catalog_unavailable_reason
 
     def __call__(self, run: Run) -> CompiledStateGraph:
         """Build one normal composed graph."""
@@ -189,30 +200,6 @@ class ThyExecutionError(RuntimeError):
     transition. Subclassing ``RuntimeError`` is precisely what turns a THY error into a consistent
     FAILED Run rather than an unhandled exception that escapes ``create_run``.
     """
-
-
-def default_thy_catalog() -> AgentCatalog:
-    """Compose the three ``ThyAgentKind`` specialist catalogs into the default THY catalog.
-
-    ThyGraph's Execute node resolves each ``AgentTask.agent`` (``data``/``coding``/``experiment``)
-    through ``AgentCatalog.get(kind.value)``, so the composed catalog must carry all three. No
-    catalog builder merges specs today, so this folds the per-agent catalogs -- each with its
-    already-resolved system prompt and output schema -- into one.
-    """
-    return _merge_catalogs(data_agent_catalog(), coding_agent_catalog(), experiment_agent_catalog())
-
-
-def _merge_catalogs(*catalogs: AgentCatalog) -> AgentCatalog:
-    """Merge name-disjoint catalogs, keeping each spec's resolved prompt and output schema."""
-    specs: list[AgentSpec] = []
-    system_prompts: dict[str, str] = {}
-    output_schemas: dict[str, type[BaseModel]] = {}
-    for catalog in catalogs:
-        for name in catalog.names():
-            specs.append(catalog.get(name))
-            system_prompts[name] = catalog.system_prompt(name)
-            output_schemas[name] = catalog.output_schema(name)
-    return AgentCatalog(tuple(specs), system_prompts=system_prompts, output_schemas=output_schemas)
 
 
 def default_activity_profile(
@@ -406,6 +393,7 @@ class ThySubgraph:
         runtime_skill_catalog: RuntimeSkillCatalog | None = None,
         runtime_skill_budget: int = 32_000,
         runtime_skill_names: tuple[str, ...] = (),
+        prepare_inputs: Callable[[tuple[str, ...]], None] | None = None,
     ) -> None:
         self.run = run
         self.catalog = catalog
@@ -420,6 +408,7 @@ class ThySubgraph:
         self.runtime_skill_catalog = runtime_skill_catalog
         self.runtime_skill_budget = runtime_skill_budget
         self.runtime_skill_names = runtime_skill_names
+        self.prepare_inputs = prepare_inputs
 
     def graph_version(self) -> str:
         """Return ThyGraph's stable definition hash."""
@@ -457,6 +446,24 @@ class ThySubgraph:
                 budget_guard=_tool_budget_guard(deps),
             )
         before_manifest = deps.artifact_store.manifest()
+        events = deps.event_log.events()
+        plan_review, pending_plan_request = _recover_plan_review(state, self.run, events, deps.gate)
+        if pending_plan_request:
+            assert plan_review is not None  # noqa: S101  # returned together by the recovery helper
+            return state.model_copy(update={"thy_plan_review": plan_review})
+        if plan_review is not None:
+            _validate_plan_catalog(
+                plan_review,
+                self.catalog,
+                self.runtime_skill_catalog,
+                resolved_tool_registry,
+            )
+            execution_decision, execution_constraints = plan_review_execution_context(
+                events, plan_review
+            )
+        else:
+            execution_decision = state.execution_decision
+            execution_constraints = state.execution_constraints
         initial_state = None
         if state.rework_signal is not None:
             initial_state = ThyState(
@@ -468,6 +475,7 @@ class ThySubgraph:
                 max_reopens=state.max_reopens,
                 single_rework=True,
                 execution_constraints=state.execution_constraints,
+                execution_decision=state.execution_decision,
             )
         elif state.thy_progress is not None:
             # A resume after a human answered a tool-call review: seed the pass with what the
@@ -481,9 +489,21 @@ class ThySubgraph:
                 experiments=state.thy_progress.experiments,
                 artifacts=state.thy_progress.artifacts,
                 execution_constraints=state.execution_constraints,
+                execution_decision=state.execution_decision,
+            )
+        elif plan_review is not None:
+            initial_state = ThyState(
+                run=self.run,
+                plan=plan_review.candidate.tasks,
+                execution_constraints=execution_constraints,
+                execution_decision=execution_decision,
             )
         output = run_thy(
-            ThyInput(run=self.run, execution_constraints=state.execution_constraints),
+            ThyInput(
+                run=self.run,
+                execution_constraints=state.execution_constraints,
+                execution_decision=state.execution_decision,
+            ),
             self.catalog,
             deps.event_log,
             provider=self.provider,
@@ -498,6 +518,7 @@ class ThySubgraph:
             metric=self.metric,
             before_model_request=deps.before_model_request,
             before_execute=deps.before_thy_execute,
+            prepare_inputs=self.prepare_inputs,
             before_model_selection=_model_budget_guard(deps),
             before_model_call=_model_call_guard(deps),
             record_model_usage=_model_usage_recorder(deps),
@@ -510,14 +531,134 @@ class ThySubgraph:
             raise ThyExecutionError(
                 f"run {self.run.id}: THY halted before completion: {output.error}"
             )
+        if output.pending_plan_review is None:
+            record_conversation_response(
+                self.run, deps.event_log, output.summary, finished=output.progress is None
+            )
         update_current(
             output={
                 "summary": output.summary,
                 "experiments": len(output.experiment_ids),
                 "artifacts": len(output.artifact_ids),
+                "plan_review_pending": output.pending_plan_review is not None,
             }
         )
-        return state.model_copy(update={"rework_signal": None, "thy_progress": output.progress})
+        return state.model_copy(
+            update={
+                "rework_signal": None,
+                "thy_progress": output.progress,
+                "thy_plan_review": output.pending_plan_review,
+                "execution_constraints": execution_constraints,
+                "execution_decision": execution_decision,
+            }
+        )
+
+
+def _recover_plan_review(
+    state: RuntimeState,
+    run: Run,
+    events: Sequence[Event],
+    gate: Gate,
+) -> tuple[ThyPlanReview | None, bool]:
+    """Restore only a pending request or the same candidate with an exact human approval."""
+    review = plan_review_from_events(events, run.id)
+    if review is None:
+        review = unparked_plan_review_from_events(events, run.id)
+    if state.thy_plan_review is not None and state.thy_plan_review != review:
+        raise PlanReviewError("checkpoint plan candidate does not match the durable Gate request")
+    if review is None:
+        return None, False
+    outcome = human_approval_outcome(events, review.decision)
+    has_recorded_answer = any(
+        event.type is EventType.HUMAN_APPROVAL
+        and event.run_id == review.decision.run_id
+        and approval_names_decision(event.payload, review.decision.id)
+        for event in events
+    )
+    if outcome is None and has_recorded_answer:
+        raise PlanReviewError("plan review has an automatic answer and needs a fresh human request")
+    if outcome is None:
+        if state.thy_progress is not None or state.rework_signal is not None:
+            raise PlanReviewError("pending plan review cannot resume alongside other THY progress")
+        _validate_plan_review_scope_for_state(state, run, events, gate, review)
+        return review, True
+    if outcome is False:
+        raise PlanReviewError("plan candidate was rejected by a human")
+    if (
+        state.thy_plan_review is None
+        and (state.rework_signal is not None or state.thy_progress is not None)
+        and _plan_review_has_started(events, review)
+    ):
+        return None, False
+    if state.thy_progress is not None or state.rework_signal is not None:
+        raise PlanReviewError("plan review cannot resume alongside other THY progress")
+    _validate_plan_review_scope_for_state(state, run, events, gate, review)
+    return review, False
+
+
+def _validate_plan_review_scope_for_state(
+    state: RuntimeState,
+    run: Run,
+    events: Sequence[Event],
+    gate: Gate,
+    review: ThyPlanReview,
+) -> None:
+    """Check the current checkpoint's execution Gate values against the exact review scope."""
+    execution_decision, execution_constraints = plan_review_execution_context(events, review)
+    if state.execution_decision != execution_decision:
+        raise PlanReviewError("checkpoint execution decision does not match the plan scope")
+    if state.execution_constraints != execution_constraints:
+        raise PlanReviewError("checkpoint execution constraints do not match the plan scope")
+    validate_plan_review_scope(
+        review,
+        run,
+        execution_decision,
+        execution_constraints,
+        policy_sha256=gate.engine.policy_sha256,
+    )
+
+
+def _plan_review_has_started(events: Sequence[Event], review: ThyPlanReview) -> bool:
+    """Recognize a historical review only after the candidate reached Execute once."""
+    request_index = next(
+        (index for index, event in enumerate(events) if event.event_id == review.request_event_id),
+        None,
+    )
+    return request_index is not None and any(
+        event.type is EventType.AGENT_STARTED and event.run_id == review.decision.run_id
+        for event in events[request_index + 1 :]
+    )
+
+
+def _validate_plan_catalog(
+    review: ThyPlanReview,
+    catalog: AgentCatalog,
+    runtime_skill_catalog: RuntimeSkillCatalog | None,
+    tool_registry: ToolRegistry | None,
+) -> None:
+    """Validate every selected agent, schema, tool and skill before its plan can execute."""
+    available_skills = set(runtime_skill_catalog.names()) if runtime_skill_catalog else set()
+    available_tools = {tool.name for tool in tool_registry} if tool_registry else set()
+    for task in review.candidate.tasks:
+        try:
+            spec = catalog.get(task.agent.value)
+            catalog.system_prompt(spec.name)
+            catalog.output_schema(spec.name)
+        except KeyError as exc:
+            raise PlanReviewError(
+                f"approved plan agent {task.agent.value!r} is no longer fully registered"
+            ) from exc
+        unavailable_tools = set(spec.tool_allowlist) - available_tools
+        if unavailable_tools:
+            raise PlanReviewError(
+                "approved plan tools are no longer available: "
+                + ", ".join(sorted(unavailable_tools))
+            )
+        unavailable = (set(task.skill_names) | set(spec.runtime_skill_names)) - available_skills
+        if unavailable:
+            raise PlanReviewError(
+                f"approved plan skills are no longer available: {', '.join(sorted(unavailable))}"
+            )
 
 
 def _record_artifact_changes(
@@ -623,6 +764,7 @@ class MiraSubgraph:
         now: Callable[[], datetime] = utc_now,
         profile_resolver: Callable[[], ActivityProfile] | None = None,
         control_plane: MiraControlPlane | None = None,
+        risk_interview: RiskInterviewService | None = None,
     ) -> None:
         self.run = run
         self.activity_profile = activity_profile
@@ -646,6 +788,7 @@ class MiraSubgraph:
         self.now = now
         self._profile_resolver = profile_resolver
         self._control_plane = control_plane
+        self._risk_interview = risk_interview
         self._preflight: MiraPreflightResult | None = None
         self._flow: MiraAuditFlow | None = None
         self._preflight_profile_key: tuple[str, int, str] | None = None
@@ -695,10 +838,7 @@ class MiraSubgraph:
         if _model_requested_human_context(assessment):
             events = tuple(deps.event_log.events())
             if not risk_uncertainty_review_resolved(events, assessment, self.activity_profile):
-                if _uncertain_risk_attempts(events, assessment) >= MAX_RISK_UNCERTAINTY_ATTEMPTS:
-                    self._escalate_risk_uncertainty(assessment)
-                else:
-                    self._request_human_context(assessment)
+                self._request_human_context(deps, assessment)
 
     def invoke(self, state: RuntimeState, *, deps: SubgraphDeps) -> RuntimeState:
         """Run the canonical post-THY audit and expose its findings to Core's Gate node."""
@@ -919,86 +1059,46 @@ class MiraSubgraph:
             route_policy=self.route_policy,
         )
 
-    def _request_human_context(self, assessment: RiskAssessment) -> None:
-        """Submit one uncertain model classification through the policy-gated control plane."""
+    def _request_human_context(self, deps: SubgraphDeps, assessment: RiskAssessment) -> None:
+        """Ask one exact-scope model question, then fail closed to the uncertainty review."""
         if self._control_plane is None:
             return
-        current = self._control_plane.controller.current_state(self.run.id).state
-        if current.condition is RunCondition.WAITING and current.wait_reason in {
-            WaitReason.INFORMATION,
-            WaitReason.APPROVAL,
-        }:
-            return
-        intent = ActionIntent(
-            id=new_id("intent"),
-            run_id=self.run.id,
-            requester=self.actor,
-            action_kind=ActionKind.REQUEST_INFORMATION,
-            subject_kind="run",
-            subject_id=self.run.id,
-            purpose="Provide the missing context needed to classify inherent risk.",
-            payload={
-                "risk_assessment_id": assessment.id,
-                "activity_profile_id": assessment.activity_profile_id,
-                "activity_profile_version": assessment.activity_profile_version,
-                "missing_information": list(assessment.missing_information),
-            },
-            idempotency_key=(
-                f"mira-risk-information:{self.run.id}:{assessment.activity_profile_id}:"
-                f"{assessment.activity_profile_version}"
-            ),
-        )
-        self._control_plane.handle(intent)
+        if self._risk_interview is not None:
+            risk_context = self._risk_model_context(deps)
+            interview_context = (
+                RiskInterviewModelContext(
+                    provider=risk_context.provider,
+                    event_log=risk_context.event_log,
+                    before_model_selection=risk_context.before_model_selection,
+                    before_model_call=risk_context.before_model_call,
+                    record_model_usage=risk_context.record_model_usage,
+                    request_ledger=risk_context.request_ledger,
+                    route_policy=risk_context.route_policy,
+                )
+                if risk_context is not None
+                else None
+            )
+            pending = self._risk_interview.clarify_uncertainty(
+                self.run,
+                assessment,
+                interview_context,
+            )
+            if pending is not None:
+                return
+        self._escalate_risk_uncertainty(deps, assessment)
 
-    def _escalate_risk_uncertainty(self, assessment: RiskAssessment) -> None:
-        """Ask a human to accept proceeding once MIRA's own uncertainty repeats past the bound.
-
-        Mirrors ``RiskInterviewService._escalate_question_limit``'s pattern for its own bounded
-        dead end (bug-hunt: preflight-information-park-is-unrecoverable). A plain ``resume`` can
-        re-attempt MIRA's inherent-risk judgement, but nothing about a retry changes the profile
-        or the model's input, so a judgement that keeps landing under
-        ``RISK_CONFIDENCE_THRESHOLD`` can otherwise repeat forever on the same unanswerable
-        ``wait_reason: information`` -- there is no ``activity_profile.questioned`` event for a
-        human to answer. Ask a human to accept the Run proceeding with an uncertain
-        classification after the first attempt instead of spending tokens repeating an unchanged
-        request.
-        """
-        if self._control_plane is None:
-            return
-        current = self._control_plane.controller.current_state(self.run.id).state
-        if current.condition is RunCondition.WAITING and current.wait_reason in {
-            WaitReason.INFORMATION,
-            WaitReason.APPROVAL,
-        }:
-            return
-        intent = ActionIntent(
-            id=new_id("intent"),
-            run_id=self.run.id,
-            requester=self.actor,
-            action_kind=ActionKind.REQUEST_APPROVAL,
-            subject_kind="run",
-            subject_id=self.run.id,
-            purpose=RISK_UNCERTAINTY_REVIEW_SUMMARY,
-            payload={
-                "risk_assessment_id": assessment.id,
-                "activity_profile_id": assessment.activity_profile_id,
-                "activity_profile_version": assessment.activity_profile_version,
-                "max_attempts": MAX_RISK_UNCERTAINTY_ATTEMPTS,
-                "reason": "risk_classification_uncertain",
-            },
-            idempotency_key=(
-                f"mira-risk-uncertainty-limit:{self.run.id}:{assessment.id}:"
-                f"{assessment.activity_profile_id}:{assessment.activity_profile_version}"
-            ),
-        )
-        result = self._control_plane.handle(intent)
-        if result.decision.decision is not Decision.REQUIRE_HUMAN_REVIEW:
-            raise RuntimeError("risk-uncertainty escalation did not require human review")
-        if result.state is None:
-            self._control_plane.controller.park_for_review(
-                self.run.id,
-                result.decision,
-                resume_from=RISK_UNCERTAINTY_RESUME_TARGET,
+    def _escalate_risk_uncertainty(self, deps: SubgraphDeps, assessment: RiskAssessment) -> None:
+        """Delegate the unchanged exact-assessment review publication seam."""
+        if self._control_plane is not None:
+            request_uncertainty_review(
+                self._control_plane,
+                deps.event_log,
+                self.run,
+                assessment,
+                self.activity_profile,
+                self.actor,
+                summary=RISK_UNCERTAINTY_REVIEW_SUMMARY,
+                max_attempts=MAX_RISK_UNCERTAINTY_ATTEMPTS,
             )
 
 
@@ -1028,45 +1128,16 @@ def _latest_matching_audit_started(
 
 
 MAX_RISK_UNCERTAINTY_ATTEMPTS = 1
-"""Escalate model uncertainty on one activity-profile version after its first attempt.
+"""Keep MIRA classification to one model attempt per exact immutable profile version.
 
-Nothing about a plain retry changes the profile, prompt or model route, so it cannot collect the
-missing human fact implied by ``risk_classification``. The first low-confidence judgement is
-therefore the useful evidence; :meth:`MiraSubgraph._escalate_risk_uncertainty` immediately asks a
-human to accept proceeding instead of entering an unanswerable ``wait_reason: information`` and
-paying for identical retries.
+An unchanged retry cannot add evidence. A separate bounded question-selection call may collect a
+human fact, and a revised profile creates a new assessment with its own exact identity.
 """
 
 
 def _model_requested_human_context(assessment: RiskAssessment) -> bool:
     """Return whether model uncertainty, rather than a call fallback, needs human context."""
     return assessment.justification.startswith(MODEL_UNCERTAINTY_JUSTIFICATION_PREFIX)
-
-
-def _uncertain_risk_attempts(events: Sequence[Event], assessment: RiskAssessment) -> int:
-    """Count MIRA's own uncertain inherent-risk judgements for this exact profile version.
-
-    Includes the just-recorded ``assessment`` itself, so the bound is reached the moment the
-    Nth uncertain judgement lands rather than requiring one further, wasted model call to notice.
-    """
-    count = 0
-    for event in events:
-        if event.type is not EventType.RISK_ASSESSMENT_RECORDED:
-            continue
-        payload = event.payload.get("risk_assessment")
-        if not isinstance(payload, dict):
-            continue
-        try:
-            recorded = RiskAssessment.model_validate_json(canonical_json(payload))
-        except (TypeError, ValueError):
-            continue
-        if (
-            recorded.activity_profile_id == assessment.activity_profile_id
-            and recorded.activity_profile_version == assessment.activity_profile_version
-            and _model_requested_human_context(recorded)
-        ):
-            count += 1
-    return count
 
 
 def _preflight_from_events(  # noqa: PLR0911, PLR0912  # fail-closed event validation
@@ -1303,6 +1374,8 @@ def build_runtime_graph_factory(  # noqa: PLR0915  # one composition root owns a
     owner_binder: Callable[[RunHandle], AbstractContextManager[None]] | None = None,
     before_model_request: Callable[[], Sequence[str]] | None = None,
     route_policy: ModelRoutePolicy | Callable[[Run], ModelRoutePolicy | None] | None = None,
+    prepare_model_inputs: Callable[[Run, ArtifactStore, EventLog, tuple[str, ...]], None]
+    | None = None,
 ) -> GraphFactory:
     """Build the production graph factory that composes THY -> MIRA -> Gate for each Run.
 
@@ -1317,6 +1390,7 @@ def build_runtime_graph_factory(  # noqa: PLR0915  # one composition root owns a
         gate_factory: Builds one Run's Gate (the composition's single ``review_findings`` caller;
             THY's plan gate uses the same Gate). Reuse the API's own ``gate_factory``.
         artifact_store_factory: Builds one Run's artifact store.
+        prepare_model_inputs: Copy verified prior model inputs into the consuming Run.
         tool_manager: The policy-gated tool manager shared across Runs.
         tool_registry: The THY tool registry. When supplied, delegated THY agents expose their
             spec allowlists through the shared Tool Manager and Gate.
@@ -1375,6 +1449,33 @@ def build_runtime_graph_factory(  # noqa: PLR0915  # one composition root owns a
         spec for spec in configured_specs if spec.framework in declared_frameworks
     )
     packs = load_default_packs()
+    from thymira.thy.nodes.plan import (  # noqa: PLC0415  # resolved planner schema is startup evidence
+        _catalog_plan_output_type,
+        _plannable_agent_names,
+    )
+
+    plannable_names = _plannable_agent_names(resolved_catalog)
+    planner_schema = (_catalog_plan_output_type(plannable_names),) if plannable_names else ()
+    runtime_skill_manifests: dict[str, RuntimeSkillManifest] = {}
+    if thy_runtime_skill_catalog is not None:
+        runtime_skill_manifests["thy"] = thy_runtime_skill_catalog.manifest()
+    if mira_runtime_skill_catalog is not None:
+        runtime_skill_manifests["mira"] = mira_runtime_skill_catalog.manifest()
+    runtime_catalog_unavailable_reason = None
+    if (thy_skill_roots and thy_runtime_skill_catalog is None) or (
+        mira_skill_roots and mira_runtime_skill_catalog is None
+    ):
+        runtime_catalog_unavailable_reason = (
+            "runtime skill catalogs are resolved per Run from configured roots and were not "
+            "read at process startup"
+        )
+    runtime_catalog_identity, runtime_schemas = runtime_catalog_snapshot(
+        resolved_catalog,
+        audit_specs=resolved_specs,
+        packs=packs,
+        response_schemas=planner_schema,
+        runtime_skill_manifests=runtime_skill_manifests,
+    )
     resolved_discovery = discovery if discovery is not None else DiscoveryLimits()
     needs_citation_index = any(spec.name == REGULATORY_EVIDENCE_AGENT for spec in resolved_specs)
     default_regulation_store = (
@@ -1452,6 +1553,7 @@ def build_runtime_graph_factory(  # noqa: PLR0915  # one composition root owns a
             # The Run's own ledger, not this graph's: a park rebuilds the graph, and a ledger
             # that started over would show the Policy Engine a Run that had spent nothing.
             usage_ledger=resolved_ledgers.for_run(run.id),
+            audit_tool_capabilities=resolved_mira_tool_registry.capabilities(),
             plan_repository=plan_repository,
             dag_repository=dag_repository,
             request_ledger=RequestLedger(run_event_log),
@@ -1506,6 +1608,11 @@ def build_runtime_graph_factory(  # noqa: PLR0915  # one composition root owns a
             runtime_skill_catalog=resolved_thy_skills,
             runtime_skill_budget=runtime_skill_budget,
             runtime_skill_names=thy_skill_names,
+            prepare_inputs=(
+                lambda ids: prepare_model_inputs(run, artifact_store, run_event_log, ids)
+            )
+            if prepare_model_inputs is not None
+            else None,
         )
         initial_profile = _resolve_profile(run)
         mira = MiraSubgraph(
@@ -1530,6 +1637,7 @@ def build_runtime_graph_factory(  # noqa: PLR0915  # one composition root owns a
             workspace=project_dir,
             route_policy=resolved_route_policy,
             control_plane=MiraControlPlane(run_store, deps.gate.engine),
+            risk_interview=risk_interview,
             runtime_skill_catalog=resolved_mira_skills,
             runtime_skill_budget=runtime_skill_budget,
             runtime_skill_names=mira_skill_names,
@@ -1628,6 +1736,7 @@ def build_runtime_graph_factory(  # noqa: PLR0915  # one composition root owns a
             tool_manager=tool_manager,
             record_repository=record_repository,
             usage_ledger=resolved_ledgers.for_run(owner.run_id),
+            audit_tool_capabilities=resolved_mira_tool_registry.capabilities(),
             request_ledger=RequestLedger(event_log),
         )
         terminal_verifier = verify_finding
@@ -1693,7 +1802,13 @@ def build_runtime_graph_factory(  # noqa: PLR0915  # one composition root owns a
         with owner_binder(owner):
             _audit_terminal(owner, work, result, terminal_audit_binding)
 
-    return _LifecycleGraphFactory(_build, _bound_terminal_audit)
+    return _LifecycleGraphFactory(
+        _build,
+        _bound_terminal_audit,
+        runtime_catalog_snapshot=runtime_catalog_identity,
+        runtime_schemas=runtime_schemas,
+        runtime_catalog_unavailable_reason=runtime_catalog_unavailable_reason,
+    )
 
 
 def write_run_assurance(
@@ -1785,6 +1900,21 @@ def _run_risk_classification(
         route_policy=route_policy,
         request_ledger=deps.request_ledger,
     )
+    clarification_field = clarification_field_for_missing_information(
+        tuple(risk.missing_information)
+    )
+    if clarification_field is not None:
+        recorded_missing = next(
+            value
+            for value in risk.missing_information
+            if clarification_field_for_missing_information((value,)) == clarification_field
+        )
+        interview.clarify_field(
+            run,
+            field=clarification_field,
+            question_source="risk_classifier",
+            recorded_concern=f"The classifier recorded {recorded_missing!r} as missing.",
+        )
     return state.model_copy(update={"risk_profile": risk})
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -10,6 +11,7 @@ import thymira.core.risk_interview_model as interview_model
 from tests.thymira.api_support import TEST_CREDENTIAL
 from thymira.agents import ModelRouteDeniedError, RequestLedger, RiskClassification
 from thymira.agents.llm import LLMResponse, ScriptedProvider
+from thymira.agents.risk import CLASSIFICATION_FAILED_MARKER
 from thymira.api import RuntimeDeps, build_default_deps
 from thymira.core import (
     GraphFactory,
@@ -21,6 +23,7 @@ from thymira.core import (
     default_activity_profile,
 )
 from thymira.core.control_plane import RunEventLog
+from thymira.core.risk_uncertainty_questions import RiskUncertaintyQuestionSelection
 from thymira.events import InMemoryEventLog, verify_events
 from thymira.mira.checks import replay_request_ledger
 from thymira.policies import PolicyEngine, load_default_policy
@@ -28,11 +31,13 @@ from thymira.schemas import (
     ActivityProfile,
     Actor,
     ActorKind,
+    ConversationInput,
     EventType,
     ModelRoutePolicy,
     ResponseOutcome,
     RiskLevel,
     Run,
+    WaitReason,
     new_id,
 )
 from thymira.state import LocalRunStore
@@ -77,7 +82,7 @@ def _interview(
         MiraControlPlane(store, PolicyEngine(load_default_policy())),
         max_questions=max_questions,
     )
-    provider = ScriptedProvider(responses)
+    provider = ScriptedProvider(responses, model="test-model")
     return run, service, provider, RunEventLog(store, run.id), store
 
 
@@ -96,6 +101,242 @@ def _complete_profile(run: Run) -> ActivityProfile:
             "potential_consequences": ("An urgent application could be reviewed late.",),
         }
     )
+
+
+def test_uncertain_execution_classification_asks_a_model_question_before_review(tmp_path):
+    question = "¿El análisis se usará solo para investigación o para decidir sobre solicitantes?"
+    run, service, provider, event_log, store = _interview(
+        tmp_path,
+        [
+            RiskClassification(
+                risk_level=RiskLevel.HIGH,
+                activity_category="model_development",
+                confidence=0.75,
+                missing_information=("decision_effect",),
+                needs_human_review=False,
+                summary="The decision effect needs clarification.",
+            ),
+            RiskUncertaintyQuestionSelection(field="decision_effect", question=question),
+        ],
+    )
+    profile = _complete_profile(run).model_copy(
+        update={"sensitive_attributes": ("age", "sex"), "decision_effect": "undeclared"}
+    )
+    risk = service.classify(run, profile, event_log, provider, route_policy=TEST_ROUTE_POLICY)
+
+    assert risk.needs_human_review is True
+    pending = service.status(run, profile).pending_question
+    assert pending is not None
+    assert pending.question == question
+    assert risk.needs_human_review is True
+    assert RunController(store).current_state(run.id).wait_reason is WaitReason.INFORMATION
+    restored = RiskInterviewService(
+        store, MiraControlPlane(store, PolicyEngine(load_default_policy()))
+    )
+    assert (
+        restored.classify(run, profile, event_log, provider, route_policy=TEST_ROUTE_POLICY) == risk
+    )
+    assert restored.status(run, profile).pending_question == pending
+    assert sum(e.type is EventType.ACTIVITY_PROFILE_QUESTIONED for e in store.events(run.id)) == 1
+    assert not any(e.type is EventType.TOOL_STARTED for e in store.events(run.id))
+    assert verify_events(store.events(run.id)).valid
+
+
+def test_complete_sensitive_profile_keeps_review_without_repeating_interview_question(
+    tmp_path: Path,
+) -> None:
+    """Sensitivity can require review without making already-known facts incomplete."""
+    run, service, provider, event_log, store = _interview(
+        tmp_path,
+        [
+            RiskClassification(
+                risk_level=RiskLevel.HIGH,
+                activity_category="data_analysis",
+                confidence=0.85,
+                missing_information=(
+                    "affected_population",
+                    "decision_effect",
+                    "intended_use",
+                ),
+                needs_human_review=True,
+                summary="Sensitive attributes require review; declared context is complete.",
+            ),
+            RiskUncertaintyQuestionSelection(
+                field="affected_population",
+                question="Who is affected by this analysis?",
+            ),
+        ],
+    )
+    profile = _complete_profile(run).model_copy(update={"sensitive_attributes": ("age", "sex")})
+
+    risk = service.classify(run, profile, event_log, provider, route_policy=TEST_ROUTE_POLICY)
+
+    status = service.status(run, profile)
+    assert risk.risk_level == RiskLevel.HIGH.value
+    assert risk.confidence == 0.85
+    assert risk.missing_information == (
+        "affected_population",
+        "decision_effect",
+        "intended_use",
+    )
+    assert risk.needs_human_review is True
+    assert status.profile.version == profile.version
+    assert status.pending_question is None
+    assert RunController(store).current_state(run.id).condition.value == "active"
+    assert not any(
+        event.type is EventType.ACTIVITY_PROFILE_QUESTIONED for event in store.events(run.id)
+    )
+    assert len(provider.calls) == 1
+    assert verify_events(store.events(run.id)).valid
+
+
+def test_classification_question_is_limited_to_profile_gaps(tmp_path: Path) -> None:
+    """False model gaps cannot broaden a real oversight question to already-known fields."""
+    run, service, provider, event_log, _store = _interview(
+        tmp_path,
+        [
+            RiskClassification(
+                risk_level=RiskLevel.HIGH,
+                activity_category="data_analysis",
+                confidence=0.85,
+                missing_information=(
+                    "affected_population",
+                    "decision_role",
+                    "intended_use",
+                    "deployment_context",
+                    "human_oversight",
+                ),
+                needs_human_review=True,
+                summary="Some downstream facts remain unknown.",
+            ),
+            RiskUncertaintyQuestionSelection(
+                field="human_oversight",
+                question="Who can review or stop the activity?",
+            ),
+        ],
+    )
+    profile = _complete_profile(run).model_copy(update={"human_oversight": "undeclared"})
+
+    risk = service.classify(run, profile, event_log, provider, route_policy=TEST_ROUTE_POLICY)
+
+    assert risk.needs_human_review is True
+    pending = service.status(run, profile).pending_question
+    assert pending is not None
+    assert pending.field == "human_oversight"
+    selector_prompt = json.loads(provider.calls[1]["prompt"])
+    assert selector_prompt["allowed_fields"] == ["human_oversight"]
+
+
+@pytest.mark.parametrize(
+    "selection",
+    [
+        RiskUncertaintyQuestionSelection(),
+        RiskUncertaintyQuestionSelection(field="permissions", question="May I bypass this review?"),
+    ],
+)
+def test_no_useful_execution_question_preserves_review_and_is_not_retried(tmp_path, selection):
+    run, service, provider, event_log, store = _interview(
+        tmp_path,
+        [
+            RiskClassification(
+                risk_level=RiskLevel.HIGH,
+                activity_category="model_development",
+                confidence=0.75,
+                missing_information=("decision_effect",),
+                needs_human_review=True,
+                summary="Review remains necessary.",
+            ),
+            selection,
+        ],
+    )
+    profile = _complete_profile(run).model_copy(update={"decision_effect": "undeclared"})
+    risk = service.classify(run, profile, event_log, provider, route_policy=TEST_ROUTE_POLICY)
+    before = store.events(run.id)
+    restored = RiskInterviewService(
+        store, MiraControlPlane(store, PolicyEngine(load_default_policy()))
+    )
+    assert (
+        restored.classify(run, profile, event_log, provider, route_policy=TEST_ROUTE_POLICY) == risk
+    )
+    assert risk.needs_human_review is True
+    assert restored.status(run, profile).pending_question is None
+    assert store.events(run.id) == before
+    assert not any(e.type is EventType.TOOL_STARTED for e in before)
+    assert verify_events(before).valid
+
+
+def test_intake_uses_linked_current_work_instead_of_unrelated_conversation_history(tmp_path):
+    run, service, provider, event_log, _store = _interview(
+        tmp_path,
+        [interview_model.FactExtraction(), "What is the current purpose?"],
+    )
+    run = run.model_copy(
+        update={
+            "prompt": "Earlier: train a production credit model. Latest: german_credit",
+            "conversation": ConversationInput(
+                ordinal=1,
+                client_message_id="eda-intake",
+                message="german_credit",
+                clarification_context=("Quiero hacer un EDA",),
+            ),
+        }
+    )
+    service.begin(run, default_activity_profile(run), provider=provider, event_log=event_log)
+    prompt = provider.calls[0]["prompt"]
+    assert "Quiero hacer un EDA" in prompt
+    assert "german_credit" in prompt
+    assert "production credit model" not in prompt
+
+
+def test_execution_question_recovers_after_selection_is_saved_before_question(
+    tmp_path, monkeypatch
+):
+    question = "What concrete decision can this analysis affect?"
+    run, service, provider, event_log, store = _interview(
+        tmp_path,
+        [
+            RiskClassification(
+                risk_level=RiskLevel.HIGH,
+                activity_category="model_development",
+                confidence=0.75,
+                missing_information=("decision_effect",),
+                needs_human_review=True,
+                summary="Clarify downstream decision effects.",
+            ),
+            RiskUncertaintyQuestionSelection(field="decision_effect", question=question),
+        ],
+    )
+    original_append = store.append
+
+    def interrupt_question(run_id, event_type, *args, **kwargs):
+        if event_type is EventType.ACTIVITY_PROFILE_QUESTIONED:
+            raise OSError("simulated interruption before question publication")
+        return original_append(run_id, event_type, *args, **kwargs)
+
+    profile = _complete_profile(run).model_copy(update={"decision_effect": "undeclared"})
+    with monkeypatch.context() as patch:
+        patch.setattr(store, "append", interrupt_question)
+        with pytest.raises(OSError, match="before question publication"):
+            service.classify(run, profile, event_log, provider, route_policy=TEST_ROUTE_POLICY)
+    selected = [
+        e
+        for e in store.events(run.id)
+        if e.payload.get("kind") == "risk.classification_clarification"
+    ]
+    assert len(selected) == 1
+    restored_store = LocalRunStore(tmp_path / "runs")
+    restored = RiskInterviewService(
+        restored_store,
+        MiraControlPlane(restored_store, PolicyEngine(load_default_policy())),
+    )
+    restored.classify(
+        run, profile, RunEventLog(restored_store, run.id), provider, route_policy=TEST_ROUTE_POLICY
+    )
+    pending = restored.status(run, profile).pending_question
+    assert pending is not None
+    assert pending.question == question
+    assert sum(e.type is EventType.RISK_CLASSIFIED for e in restored_store.events(run.id)) == 1
+    assert verify_events(restored_store.events(run.id)).valid
 
 
 def test_complete_profile_skips_model_context_extraction(tmp_path: Path) -> None:
@@ -143,6 +384,14 @@ def test_complete_profile_autonomy_satisfies_deployment_context(
     assert risk.missing_information == ()
     assert risk.needs_human_review is False
     assert '"deployment_context"' in provider.calls[0]["prompt"]
+    assert f"\n{run.prompt}\n" in provider.calls[0]["prompt"]
+    for value in (
+        profile.affected_population,
+        profile.jurisdiction,
+        *profile.data_categories,
+        *profile.potential_consequences,
+    ):
+        assert value in provider.calls[0]["prompt"]
     assert verify_events(event_log.events()).valid
 
 
@@ -439,6 +688,10 @@ def test_insufficient_answer_gets_one_directed_follow_up_and_keeps_profile_versi
         "reason": "It does not state the activity outcome.",
         "sufficient": False,
     }
+    follow_up_prompt = provider.calls[3]["prompt"]
+    assert "Canonical activity-profile fact:" in follow_up_prompt
+    assert "Previous human-facing question (context only):" in follow_up_prompt
+    assert "Earlier question-answer turns for this field" in follow_up_prompt
 
     updated = service.answer(
         run,
@@ -451,6 +704,128 @@ def test_insufficient_answer_gets_one_directed_follow_up_and_keeps_profile_versi
     assert updated.version == 2
     assert updated.purpose == "It prioritises urgent applications for human review."
     assert verify_events(event_log.events()).valid
+
+
+def test_generated_mitigation_question_does_not_expand_the_consequence_fact(
+    tmp_path: Path,
+) -> None:
+    """MIRA-selected question wording cannot expand the persisted fact requirement."""
+    mitigation_question = (
+        "What specific measures will be put in place to mitigate the risk of misleading "
+        "analysis due to the use of this historical dataset?"
+    )
+    answer = (
+        "Este es un EDA de test, no va a tener efecto sobre ningun tipo de persona fisica, "
+        "simplemente para explorar un poco el dataset."
+    )
+    run, service, provider, event_log, store = _interview(
+        tmp_path,
+        [
+            RiskClassification(
+                risk_level=RiskLevel.HIGH,
+                activity_category="model_development",
+                confidence=0.75,
+                missing_information=("potential_consequences",),
+                needs_human_review=True,
+                summary="The inherent risk needs clarification.",
+            ),
+            {
+                "field": "potential_consequences",
+                "question": mitigation_question,
+            },
+            {"sufficient": True, "reason": "The answer describes the scoped consequences."},
+        ],
+    )
+    run = run.model_copy(update={"prompt": "Run an exploratory data analysis of german_credit."})
+    profile = _complete_profile(run).model_copy(update={"potential_consequences": ("undeclared",)})
+    risk = service.classify(
+        run,
+        profile,
+        event_log,
+        provider,
+        route_policy=TEST_ROUTE_POLICY,
+    )
+    pending = service.status(run, profile).pending_question
+    assert pending is not None
+    assert pending.field == "potential_consequences"
+    assert risk.needs_human_review is True
+
+    updated = service.answer(
+        run,
+        answer=answer,
+        actor=Actor(kind=ActorKind.HUMAN, id="reviewer", authenticated=True),
+        expected_question_id=pending.event_id,
+        provider=provider,
+        event_log=event_log,
+    )
+
+    assert updated.version == 2
+    assert updated.potential_consequences == tuple(part.strip() for part in answer.split(","))
+    judgment_system = " ".join(provider.calls[2]["system"].split())
+    assert "An explicit scoped denial is a supplied fact" in judgment_system
+    assert "even if it contradicts a project-derived value" in judgment_system
+    assert "risk assessment and policy must evaluate it independently" in judgment_system
+    selection_prompt = provider.calls[1]["prompt"]
+    assert "allowed_field_definitions" in selection_prompt
+    assert "inherent impact; it does not ask for controls" in selection_prompt
+    assert "mitigation measures are assessed separately" in " ".join(
+        provider.calls[1]["system"].split()
+    )
+    judgment_prompt = provider.calls[2]["prompt"]
+    assert "Canonical activity-profile fact:" in judgment_prompt
+    assert "Question shown to the human (context only):" in judgment_prompt
+    assert "Required fact question:" not in judgment_prompt
+    assert "controls, safeguards, or mitigations" in judgment_prompt
+    assert mitigation_question in judgment_prompt
+    assert run.prompt in judgment_prompt
+    assert answer in judgment_prompt
+    answer_event = next(
+        event
+        for event in store.events(run.id)
+        if event.type is EventType.ACTIVITY_PROFILE_ANSWERED
+        and event.payload.get("question_event_id") == pending.event_id
+    )
+    assert answer_event.payload["answer"] == answer
+    assert answer_event.payload["sufficiency"]["sufficient"] is True
+    assert verify_events(event_log.events()).valid
+
+    # Reopen the service from the event-backed store and inspect the next real classifier call.
+    reopened_service = RiskInterviewService(
+        store,
+        MiraControlPlane(store, PolicyEngine(load_default_policy())),
+    )
+    persisted_profile = reopened_service.status(run, profile).profile
+    assert persisted_profile.version == updated.version
+    assert persisted_profile.potential_consequences == updated.potential_consequences
+    classifier = ScriptedProvider(
+        [
+            RiskClassification(
+                risk_level=RiskLevel.MEDIUM,
+                activity_category="data_analysis",
+                confidence=0.8,
+                needs_human_review=False,
+                summary="Local exploratory analysis with no declared person-level effect.",
+            )
+        ],
+        model="test-model",
+    )
+    reopened_service.classify(
+        run,
+        persisted_profile,
+        RunEventLog(store, run.id),
+        classifier,
+        route_policy=TEST_ROUTE_POLICY,
+    )
+    assert len(classifier.calls) == 1
+    classification_prompt = classifier.calls[0]["prompt"]
+    classification_system = classifier.calls[0]["system"]
+    for consequence in persisted_profile.potential_consequences:
+        assert consequence in classification_prompt
+    assert "potential_consequences" in classification_prompt
+    assert "Classifier prompt reference: risk-classifier-v3" in classification_prompt
+    assert "Activity categories:" in classification_system
+    assert "controls, safeguards, or mitigations" not in classification_prompt.casefold()
+    assert "controls, safeguards, or mitigations" not in classification_system.casefold()
 
 
 def test_invalid_sufficiency_judgment_is_charged_before_accepting_human_fallback(
@@ -488,6 +863,48 @@ def test_invalid_sufficiency_judgment_is_charged_before_accepting_human_fallback
     assert recorded[-1].metadata["schema"] == "SufficiencyJudgment"
 
 
+def test_no_live_decision_answer_is_judged_with_the_request_and_existing_profile(
+    tmp_path: Path,
+) -> None:
+    """A scoped no-live-decision answer is evaluated beside the exact request and profile."""
+    run, service, provider, event_log, _store = _interview(
+        tmp_path,
+        [
+            {
+                "sufficient": True,
+                "reason": "The answer explicitly rules out live decision effects.",
+            }
+        ],
+    )
+    profile = _complete_profile(run).model_copy(
+        update={
+            "purpose": "An offline test of a credit-risk dataset.",
+            "decision_effect": "No live decision effect; offline test only.",
+            "potential_consequences": ("None; this test has no operational consequence.",),
+        }
+    )
+    service.begin(run, profile)
+    question = service.clarify_field(run, field="decision_effect")
+    assert question is not None
+
+    answer = "This is an offline test; no model result influences any live decision."
+    updated = service.answer(
+        run,
+        answer=answer,
+        actor=Actor(kind=ActorKind.HUMAN, id="reviewer", authenticated=True),
+        expected_question_id=question.event_id,
+        provider=provider,
+        event_log=event_log,
+    )
+
+    assert updated.version == 2
+    judgment_prompt = provider.calls[0]["prompt"]
+    assert run.prompt in judgment_prompt
+    assert profile.decision_effect in judgment_prompt
+    assert "Full current activity profile" in judgment_prompt
+    assert answer in judgment_prompt
+
+
 def test_insufficient_answer_still_hits_the_existing_question_limit(tmp_path: Path) -> None:
     """A failed sufficiency judgment cannot create an unbounded follow-up loop."""
     run, service, provider, event_log, store = _interview(
@@ -521,6 +938,37 @@ def test_insufficient_answer_still_hits_the_existing_question_limit(tmp_path: Pa
         sum(event.type is EventType.ACTIVITY_PROFILE_QUESTIONED for event in event_log.events())
         == 1
     )
+    review = next(
+        event
+        for event in event_log.events()
+        if event.type is EventType.HUMAN_APPROVAL_REQUESTED
+        and isinstance(event.payload.get("request_payload"), dict)
+        and event.payload["request_payload"].get("review_kind") == "missing_activity_profile"
+    )
+    request_payload = review.payload["request_payload"]
+    assert request_payload["reason"] == "total_question_limit"
+    assert request_payload["field"] == "purpose"
+    assert request_payload["questions_asked"] == {
+        "total": 1,
+        "max_total": 1,
+        "field_total": 1,
+        "max_per_field": 3,
+    }
+    assert request_payload["last_question"]["question"] == "What is the purpose?"
+    assert request_payload["last_answer"]["answer"] == "Something with data."
+    assert request_payload["last_answer"]["sufficiency"] == {
+        "sufficient": False,
+        "reason": "The answer is vague.",
+    }
+    assert "purpose" in request_payload["remaining_fields"]
+    assert set(request_payload["decision_effects"]) == {"approve", "reject"}
+    limit_park = next(
+        event
+        for event in reversed(event_log.events())
+        if event.type is EventType.RUN_TRANSITIONED
+        and event.payload.get("command") == "wait_for_approval"
+    )
+    assert limit_park.payload["resume_from"] == "interview_limit"
     assert verify_events(event_log.events()).valid
 
 
@@ -595,8 +1043,9 @@ def test_repeated_insufficient_answers_hit_a_per_field_limit(tmp_path: Path) -> 
     )
     service.begin(run, profile, provider=provider, event_log=event_log)
     human = Actor(kind=ActorKind.HUMAN, id="reviewer", authenticated=True)
+    first_answer = "Only EU-level law is declared. " + ("x" * 2_000) + " OMITTED-TAIL"
     for answer in (
-        "Only EU-level law is declared.",
+        first_answer,
         "No member state is declared.",
         "The organization's establishment is unknown.",
     ):
@@ -620,6 +1069,20 @@ def test_repeated_insufficient_answers_hit_a_per_field_limit(tmp_path: Path) -> 
     ]
     assert len(questions) == 3
     assert {event.payload["field"] for event in questions} == {"jurisdiction"}
+    second_follow_up_prompt = provider.calls[5]["prompt"]
+    assert "Which jurisdiction governs the activity?" in second_follow_up_prompt
+    assert "Only EU-level law is declared." in second_follow_up_prompt
+    history_text = second_follow_up_prompt.split(
+        "Earlier question-answer turns for this field (bounded excerpts; omitted content is not "
+        "evidence of absence):\n",
+        maxsplit=1,
+    )[1].split("\nCurrent Run request:\n", maxsplit=1)[0]
+    history = json.loads(history_text)
+    assert len(history) == 1
+    assert history[0]["question"] == "Which jurisdiction governs the activity?"
+    assert history[0]["answer"] == first_answer[:1_200]
+    assert "OMITTED-TAIL" not in history_text
+    assert history[0]["sufficiency"]["reason"] == "No national jurisdiction is stated."
     assert status.requires_human_review is True
     assert status.pending_question is None
     assert any(event.type is EventType.HUMAN_APPROVAL_REQUESTED for event in event_log.events())
@@ -881,7 +1344,7 @@ def test_classification_keeps_missing_information_an_interview_field_can_answer(
     tmp_path: Path,
 ) -> None:
     """A gap the interview itself could close is kept, so the bound never hides a real question."""
-    run, service, provider, event_log, _store = _interview(
+    run, service, provider, event_log, store = _interview(
         tmp_path,
         [
             RiskClassification(
@@ -891,13 +1354,18 @@ def test_classification_keeps_missing_information_an_interview_field_can_answer(
                 confidence=0.99,
                 needs_human_review=False,
                 summary="Bounded local analysis.",
-            )
+            ),
+            RiskUncertaintyQuestionSelection(
+                field="human_oversight",
+                question="Who can review or stop the activity?",
+            ),
         ],
     )
+    profile = _complete_profile(run).model_copy(update={"human_oversight": "undeclared"})
 
     risk = service.classify(
         run,
-        _complete_profile(run),
+        profile,
         event_log,
         provider,
         route_policy=ModelRoutePolicy.from_routes(("test-model",), authority="code-owned-test"),
@@ -905,9 +1373,75 @@ def test_classification_keeps_missing_information_an_interview_field_can_answer(
 
     assert risk.missing_information == ("human_oversight",)
     assert risk.needs_human_review is True
+    pending = service.status(run, profile).pending_question
+    assert pending is not None
+    assert pending.field == "human_oversight"
+    assert RunController(store).current_state(run.id).wait_reason is WaitReason.INFORMATION
 
 
-def test_classification_prompt_carries_the_declared_decision_context(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("risk_level", "activity_category"),
+    [(RiskLevel.UNKNOWN, "data_analysis"), (RiskLevel.HIGH, "unknown")],
+)
+def test_unknown_classification_stays_fail_closed_and_keeps_clarification(
+    tmp_path: Path,
+    risk_level: RiskLevel,
+    activity_category: str,
+) -> None:
+    """Unknown level or category still asks a question and retains the review requirement."""
+    run, service, provider, event_log, store = _interview(
+        tmp_path,
+        [
+            RiskClassification(
+                risk_level=risk_level,
+                activity_category=activity_category,
+                confidence=0.95,
+                missing_information=(),
+                needs_human_review=False,
+                summary="The classification remains uncertain.",
+            ),
+            RiskUncertaintyQuestionSelection(
+                field="purpose",
+                question="What is the purpose of this activity?",
+            ),
+        ],
+    )
+    profile = _complete_profile(run)
+
+    risk = service.classify(run, profile, event_log, provider, route_policy=TEST_ROUTE_POLICY)
+
+    assert risk.needs_human_review is True
+    pending = service.status(run, profile).pending_question
+    assert pending is not None
+    assert RunController(store).current_state(run.id).wait_reason is WaitReason.INFORMATION
+
+
+def test_failed_classification_stays_fail_closed_and_keeps_clarification(tmp_path: Path) -> None:
+    """A classifier fallback still carries its missing marker into human clarification."""
+    run, service, provider, event_log, store = _interview(
+        tmp_path,
+        [
+            {},
+            RiskUncertaintyQuestionSelection(
+                field="purpose",
+                question="What is the purpose of this activity?",
+            ),
+        ],
+    )
+    profile = _complete_profile(run)
+
+    risk = service.classify(run, profile, event_log, provider, route_policy=TEST_ROUTE_POLICY)
+
+    assert CLASSIFICATION_FAILED_MARKER in risk.missing_information
+    assert risk.needs_human_review is True
+    assert service.status(run, profile).pending_question is not None
+    assert RunController(store).current_state(run.id).wait_reason is WaitReason.INFORMATION
+
+
+@pytest.mark.parametrize("clarified", [False, True])
+def test_classification_prompt_carries_the_declared_decision_context(
+    tmp_path: Path, clarified: bool
+) -> None:
     """Core sends the profile's decision effect, autonomy and oversight, never a placeholder."""
     run, service, provider, event_log, _store = _interview(
         tmp_path,
@@ -922,6 +1456,17 @@ def test_classification_prompt_carries_the_declared_decision_context(tmp_path: P
         ],
     )
     profile = _complete_profile(run).model_copy(update={"human_oversight": "undeclared"})
+    if clarified:
+        run = run.model_copy(
+            update={
+                "conversation": ConversationInput(
+                    ordinal=1,
+                    client_message_id="eda-clarified",
+                    message="Si",
+                    clarification_context=("Quiero realizar un EDA", "german_credit"),
+                )
+            }
+        )
 
     service.classify(
         run,
@@ -936,3 +1481,6 @@ def test_classification_prompt_carries_the_declared_decision_context(tmp_path: P
     assert "Recommendation only." in prompt
     assert "profile-human_oversight" not in prompt
     assert "undeclared" not in prompt
+    if clarified:
+        assert "Quiero realizar un EDA" in prompt
+        assert "german_credit" in prompt
