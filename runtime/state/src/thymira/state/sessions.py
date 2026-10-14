@@ -29,6 +29,7 @@ class InMemorySessionRepository:
         self,
         *,
         project_id: Id | None = None,
+        conversation: bool | None = None,
         limit: int = 50,
         cursor: str | None = None,
     ) -> Page[Session]:
@@ -36,6 +37,8 @@ class InMemorySessionRepository:
         sessions = list(self._sessions.values())
         if project_id is not None:
             sessions = [session for session in sessions if session.project_id == project_id]
+        if conversation is not None:
+            sessions = [session for session in sessions if session.conversation is conversation]
         return _page(sessions, limit=limit, cursor=cursor)
 
 

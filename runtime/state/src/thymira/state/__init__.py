@@ -29,6 +29,7 @@ from thymira.state.board import (
     LocalBoardRepository,
 )
 from thymira.state.checkpoints import CheckpointRepository, LocalCheckpointRepository
+from thymira.state.conversation_lock import conversation_lock
 from thymira.state.dag import DagRepository, LocalDagRepository, LocalOrchestratorBoardRepository
 from thymira.state.events import EventStore, LocalEventStore
 from thymira.state.lifecycle import (
@@ -124,6 +125,7 @@ __all__ = [
     "UnitOfWork",
     "canonical_artifact_name",
     "canonical_workspace_path",
+    "conversation_lock",
     "replace_with_retry",
     "resolve_authority_secret",
     "sign_authority",

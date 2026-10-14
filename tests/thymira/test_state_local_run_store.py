@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -25,7 +27,6 @@ from thymira.state import LocalArtifactStore, LocalRunStore
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from pathlib import Path
 
 
 def _run() -> Run:
@@ -76,6 +77,95 @@ def test_create_and_get_run_creates_required_layout(tmp_path: Path) -> None:
     assert (run_dir / "run.json").is_file()
     assert (run_dir / "mira-context").is_dir()
     assert (run_dir / "exports").is_dir()
+
+
+@pytest.mark.parametrize("operation", ["get", "version"])
+def test_projection_reads_cannot_overwrite_a_concurrent_append(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    """A reader rebuilding an old snapshot cannot replace a newly appended projection."""
+    store = _store(tmp_path)
+    run = store.create(_run(), actor=Actor.system())
+    snapshot_taken = threading.Event()
+    release_reader = threading.Event()
+    writer_done = threading.Event()
+    original_read = store._read_projection
+    task_id = new_id("task")
+    agent_id = new_id("agent")
+
+    def pause_snapshot(run_id: str) -> dict[str, object] | None:
+        snapshot_taken.set()
+        assert release_reader.wait(5)
+        return original_read(run_id)
+
+    def append_task() -> None:
+        try:
+            store.append(
+                run.id,
+                EventType.AGENT_STARTED,
+                Actor.system(),
+                {"task_id": task_id},
+                expected_version=None,
+                subject_id=agent_id,
+            )
+        finally:
+            writer_done.set()
+
+    monkeypatch.setattr(store, "_read_projection", pause_snapshot)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        reader = executor.submit(getattr(store, operation), run.id)
+        try:
+            assert snapshot_taken.wait(5)
+            writer = executor.submit(append_task)
+            # Before the fix the writer completes while the reader holds an old snapshot.
+            # A serialized writer must instead wait until this reader releases the Run lock.
+            writer_done.wait(0.2)
+        finally:
+            release_reader.set()
+        reader.result(timeout=5)
+        writer.result(timeout=5)
+
+    events = store.events(run.id)
+    projection = json.loads((tmp_path / "runs" / run.id / "run.json").read_text("utf-8"))
+    assert projection["version"] == len(events) == 2
+    assert projection["last_event_hash"] == events[-1].hash
+    assert projection["run"]["task_ids"] == [task_id]
+    assert projection["run"]["agent_ids"] == [agent_id]
+
+
+def test_projection_readback_failure_preserves_its_cause_and_durable_event(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A genuine read error still fails with its OS cause and leaves the event verifiable."""
+    store = _store(tmp_path)
+    run = store.create(_run(), actor=Actor.system())
+    projection_path = tmp_path / "runs" / run.id / "run.json"
+    original_read = Path.read_text
+
+    def deny_projection_read(
+        path: Path, encoding: str | None = None, errors: str | None = None
+    ) -> str:
+        if path == projection_path:
+            raise PermissionError(13, "Access is denied", str(path))
+        return original_read(path, encoding=encoding, errors=errors)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "read_text", deny_projection_read)
+        with pytest.raises(
+            ValueError, match=r"projection read-back failed:.*Access is denied"
+        ) as error:
+            store.append(
+                run.id,
+                EventType.AGENT_STARTED,
+                Actor.system(),
+                {"task_id": new_id("task")},
+                expected_version=None,
+                subject_id=new_id("agent"),
+            )
+
+    assert isinstance(error.value.__cause__, PermissionError)
+    assert len(store.events(run.id)) == 2
+    assert LocalRunStore(tmp_path / "runs").get(run.id).task_ids
 
 
 def test_local_run_storage_exposes_verified_restrictive_permission_evidence(

@@ -23,9 +23,15 @@ from thymira.schemas import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Callable, Mapping, Sequence
 
-    from thymira.policies.models import Policy, RiskProfile, ToolCapability
+    from thymira.policies.models import (
+        FindingReviewContext,
+        FindingRule,
+        Policy,
+        RiskProfile,
+        ToolCapability,
+    )
 
 SubjectKind = Literal["run", "task", "tool_call", "findings"]
 
@@ -404,42 +410,32 @@ class PolicyEngine:
         )
 
     # ----------------------------------------------------------------- findings
-    def decide_findings(self, *, run_id: str, findings: Sequence[AuditFinding]) -> PolicyDecision:
-        """No findings is PASS; otherwise the highest-precedence matching rule, else the default.
+    def decide_findings(
+        self,
+        *,
+        run_id: str,
+        findings: Sequence[AuditFinding],
+        review_context: FindingReviewContext | None = None,
+    ) -> PolicyDecision:
+        """Decide findings through the ordinary policy plus an exact optional review context."""
+        return _decide_findings_with_context(
+            self,
+            run_id,
+            findings,
+            review_context,
+            decision_factory=self._decision,
+            ordinary_decider=self._decide_findings,
+        )
 
-        Ties between rules of equal precedence are broken by policy order (first wins).
-        """
-        if not findings:
-            return self._decision(
-                run_id, "findings", "run", Decision.PASS, "no_findings", "No audit findings."
-            )
-        best: tuple[int, int, str, str, Decision] | None = None
-        for position, rule in enumerate(self.policy.finding_rules):
-            for finding in findings:
-                if rule.matches(finding):
-                    candidate = (
-                        rule.decision.precedence,
-                        -position,
-                        rule.id,
-                        rule.reason,
-                        rule.decision,
-                    )
-                    if best is None or candidate[:2] > best[:2]:
-                        best = candidate
-                    break
-        finding_ids = tuple(finding.id for finding in findings)
-        if best is None:
-            return self._decision(
-                run_id,
-                "findings",
-                "run",
-                self.policy.findings_default_decision,
-                "findings_default",
-                f"{len(findings)} finding(s) without a matching rule.",
-                finding_ids,
-            )
-        _, _, rule_id, reason, decision = best
-        return self._decision(run_id, "findings", "run", decision, rule_id, reason, finding_ids)
+    def _decide_findings(self, run_id: str, findings: Sequence[AuditFinding]) -> PolicyDecision:
+        """Evaluate the ordinary ordered finding policy for the supplied obligations."""
+        return _decide_ordinary_findings(
+            run_id,
+            findings,
+            self.policy.finding_rules,
+            self.policy.findings_default_decision,
+            self._decision,
+        )
 
     # ------------------------------------------------------------------- budget
     def declares_budget_scope(self, scope: str) -> bool:
@@ -629,3 +625,181 @@ def allows_execution(decision: PolicyDecision, approval: Approval | None = None)
             and approval.approved_by.authenticated
         )
     return False
+
+
+def _decide_ordinary_findings(
+    run_id: str,
+    findings: Sequence[AuditFinding],
+    rules: Sequence[FindingRule],
+    default_decision: Decision,
+    decision_factory: Callable[..., PolicyDecision],
+) -> PolicyDecision:
+    """Apply ordered finding rules without depending on PolicyEngine internals."""
+    if not findings:
+        return decision_factory(
+            run_id, "findings", "run", Decision.PASS, "no_findings", "No audit findings."
+        )
+    best: tuple[int, int, str, str, Decision] | None = None
+    for position, rule in enumerate(rules):
+        for finding in findings:
+            if rule.matches(finding):
+                candidate = (
+                    rule.decision.precedence,
+                    -position,
+                    rule.id,
+                    rule.reason,
+                    rule.decision,
+                )
+                if best is None or candidate[:2] > best[:2]:
+                    best = candidate
+                break
+    finding_ids = tuple(finding.id for finding in findings)
+    if best is None:
+        return decision_factory(
+            run_id,
+            "findings",
+            "run",
+            default_decision,
+            "findings_default",
+            f"{len(findings)} finding(s) without a matching rule.",
+            finding_ids,
+        )
+    _, _, rule_id, reason, decision = best
+    return decision_factory(run_id, "findings", "run", decision, rule_id, reason, finding_ids)
+
+
+def _decide_findings_with_context(
+    engine: PolicyEngine,
+    run_id: str,
+    findings: Sequence[AuditFinding],
+    review_context: FindingReviewContext | None,
+    *,
+    decision_factory: Callable[..., PolicyDecision],
+    ordinary_decider: Callable[[str, Sequence[AuditFinding]], PolicyDecision],
+) -> PolicyDecision:
+    """Apply bounded indeterminate-review handling around the ordinary finding rules."""
+    finding_ids = tuple(finding.id for finding in findings)
+    if review_context is not None and review_context.audit_complete is not True:
+        return decision_factory(
+            run_id,
+            "findings",
+            "run",
+            Decision.BLOCK,
+            "audit_incomplete",
+            "The MIRA audit is incomplete or contains controls that were not evaluated; "
+            "this Run cannot close from an incomplete report.",
+            finding_ids,
+        )
+    eligible = _reviewable_indeterminate_ids(engine, findings, review_context)
+    if eligible:
+        ordinary = ordinary_decider(
+            run_id, tuple(finding for finding in findings if finding.id not in eligible)
+        )
+        if ordinary.decision in {Decision.BLOCK, Decision.REQUIRE_HUMAN_REVIEW}:
+            return ordinary.model_copy(update={"finding_ids": finding_ids})
+        controls = ", ".join(finding.control_id for finding in findings if finding.id in eligible)
+        return decision_factory(
+            run_id,
+            "findings",
+            "run",
+            Decision.REQUIRE_HUMAN_REVIEW,
+            "GOV-101-INDETERMINATE",
+            "A critical finding remains indeterminate in an exact bounded local descriptive "
+            f"scope; human review is required before this Run can close ({controls}).",
+            finding_ids,
+        )
+    ordinary = ordinary_decider(run_id, findings)
+    if (
+        review_context is None
+        or ordinary.decision is not Decision.BLOCK
+        or ordinary.rule_id != "GOV-101"
+    ):
+        return ordinary
+    return ordinary.model_copy(
+        update={"reason": _indeterminate_block_reason(findings, review_context)}
+    )
+
+
+def _indeterminate_block_reason(
+    findings: Sequence[AuditFinding], context: FindingReviewContext
+) -> str:
+    """Explain whether a retained critical finding is uncertain or affirmatively supported."""
+    candidates = {candidate.finding_id: candidate for candidate in context.candidates}
+    uncertain = any(
+        (candidate := candidates.get(finding.id)) is None or candidate.supported is not True
+        for finding in findings
+        if finding.severity.value == "CRITICAL"
+    )
+    if not uncertain:
+        return (
+            "A critical finding is supported by the available verification and remains prohibited "
+            "by GOV-101; human review cannot waive that prohibition."
+        )
+    return (
+        "A critical finding remains uncertain or its verification metadata is incompatible; its "
+        "exact descriptive scope is not complete enough for human review: "
+        f"{context.scope_reason}."
+    )
+
+
+def _reviewable_indeterminate_ids(
+    engine: PolicyEngine,
+    findings: Sequence[AuditFinding],
+    context: FindingReviewContext | None,
+) -> tuple[str, ...]:
+    """Select only exact unresolved GOV-101 obligations in a Core-validated bounded scope."""
+    if (
+        context is None
+        or context.audit_complete is not True
+        or context.bounded_local_descriptive_scope is not True
+        or context.policy_sha256 != engine.policy_sha256
+        or context.finding_ids != tuple(finding.id for finding in findings)
+        or not context.eligible_finding_ids
+        or len(context.eligible_finding_ids) != len(set(context.eligible_finding_ids))
+    ):
+        return ()
+    unsigned = context.model_dump(mode="json")
+    digest = unsigned.pop("context_sha256", None)
+    if not isinstance(digest, str) or sha256_text(canonical_json(unsigned)) != digest:
+        return ()
+    expected_findings = sha256_text(
+        canonical_json([finding.model_dump(mode="json") for finding in findings])
+    )
+    if context.findings_sha256 != expected_findings:
+        return ()
+    candidates = {candidate.finding_id: candidate for candidate in context.candidates}
+    eligible: list[str] = []
+    for finding in findings:
+        candidate = candidates.get(finding.id)
+        if (
+            finding.id not in context.eligible_finding_ids
+            or finding.severity.value != "CRITICAL"
+            or finding.agent_id is None
+            or candidate is None
+            or candidate.control_id != finding.control_id
+            or candidate.supported is not None
+        ):
+            continue
+        matched_blocking = [
+            rule
+            for rule in engine.policy.finding_rules
+            if rule.decision is Decision.BLOCK and rule.matches(finding)
+        ]
+        if len(matched_blocking) != 1 or not _standard_critical_block(matched_blocking[0]):
+            continue
+        eligible.append(finding.id)
+    return tuple(eligible)
+
+
+def _standard_critical_block(rule: FindingRule) -> bool:
+    """Recognize only GOV-101's universal critical-severity prohibition semantics."""
+    return (
+        rule.id == "GOV-101"
+        and rule.decision is Decision.BLOCK
+        and rule.min_severity is not None
+        and rule.min_severity.value == "CRITICAL"
+        and rule.min_confidence is None
+        and not rule.frameworks
+        and not rule.control_ids
+        and rule.evidence is None
+    )

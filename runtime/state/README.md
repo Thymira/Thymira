@@ -32,6 +32,19 @@ invalid, or stale. `LocalRunStore.create_context()` creates one immutable
 expected Run version; the snapshot file and event append remain separate operations, with no
 multi-file transaction or latest pointer.
 
+Conversation turn creation uses the same cross-process `FileLock` semantics through
+`conversation_lock`, keyed by Session under `.locks/`. Lifecycle publication recovery accepts an
+optional Session scope so a conversation retry can finish only that Session's staged publication;
+the unscoped recovery behavior remains available to existing lifecycle callers. These locks
+serialize turn creation, not Run execution or event writes.
+
+`LocalDiscussionRepository` stores atomic Session-scoped discussion records separately from the
+Run-derived transcript. `SessionProviderLog` stores and verifies a bounded hash-linked provider
+evidence chain per discussion, with Session/discussion IDs rather than a fictitious Run ID.
+The runtime holds a discussion OS lock across publication/inference. Pending records precede
+provider dispatch, actor/retry bindings are private, and an interrupted request is not silently
+issued again. This is a local-backend capability; no PostgreSQL discussion backend is claimed.
+
 The repository, `EventStore`, `CheckpointRepository` and `UnitOfWork` protocols are implemented,
 tested P1 foundation code; `RunController` and `RunService` now use `LocalRunStore` as the
 control-plane persistence seam. The local `UnitOfWork` restores only files staged by its

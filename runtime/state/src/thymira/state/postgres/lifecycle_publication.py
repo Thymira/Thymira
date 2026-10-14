@@ -234,18 +234,17 @@ class PgPublicationStore:
             raise
         return owner, receipt
 
-    def recover(self) -> tuple[PublicationReceipt, ...]:
+    def recover(self, *, session_id: str | None = None) -> tuple[PublicationReceipt, ...]:
         """Finish valid prepared publications left by a process crash."""
+        statement = (
+            sa.select(tables.lifecycle_publications.c.document)
+            .where(tables.lifecycle_publications.c.status == _PREPARED)
+            .order_by(tables.lifecycle_publications.c.id.asc())
+        )
+        if session_id is not None:
+            statement = statement.where(tables.lifecycle_publications.c.session_id == session_id)
         with self._engine.connect() as conn:
-            documents = (
-                conn.execute(
-                    sa.select(tables.lifecycle_publications.c.document)
-                    .where(tables.lifecycle_publications.c.status == _PREPARED)
-                    .order_by(tables.lifecycle_publications.c.id.asc())
-                )
-                .scalars()
-                .all()
-            )
+            documents = conn.execute(statement).scalars().all()
         receipts: list[PublicationReceipt] = []
         for document in documents:
             try:

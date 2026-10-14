@@ -25,9 +25,8 @@ class FileLock(AbstractContextManager["FileLock"]):
     def __enter__(self) -> FileLock:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         handle = self.path.open("a+b")
-        if self.path.stat().st_size == 0:
-            handle.write(b"\0")
-            handle.flush()
+        # Windows byte-range locks can extend beyond EOF. Writing a sentinel before locking
+        # races with another holder; empty lock files need no initialization on either platform.
         handle.seek(0)
         try:
             if os.name == "nt":

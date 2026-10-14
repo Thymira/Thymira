@@ -82,9 +82,11 @@ class _PublicationMethods:
         owner, receipt = self._publication.commit(prepared)
         return PgRunHandle(self, owner, receipt)
 
-    def recover_publications(self) -> tuple[PublicationReceipt, ...]:
+    def recover_publications(
+        self, *, session_id: str | None = None
+    ) -> tuple[PublicationReceipt, ...]:
         """Complete valid prepared publications after a process restart."""
-        return self._publication.recover()
+        return self._publication.recover(session_id=session_id)
 
     def is_visible(self, run_id: str) -> bool:
         """Return whether the Run and inverse Session link are committed."""

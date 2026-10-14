@@ -33,7 +33,7 @@ from thymira.schemas import (
 if TYPE_CHECKING:
     from thymira.events import EventLog
     from thymira.policies.engine import PolicyEngine, SubjectKind
-    from thymira.policies.models import RiskProfile, ToolCapability
+    from thymira.policies.models import FindingReviewContext, RiskProfile, ToolCapability
 
 
 class ApprovalRequest(ThymiraModel):
@@ -119,6 +119,77 @@ def _requested_payload(
     }
 
 
+def _reconstructed_approval_request(
+    run_id: str,
+    decision: PolicyDecision,
+    recorded: Mapping[str, Any],
+    fallback_summary: str,
+    fallback_cost: dict[str, Any] | None,
+) -> ApprovalRequest:
+    """Rebuild the human-visible request from its persisted payload after process restart."""
+    nested_payload = recorded.get("request_payload")
+    if isinstance(nested_payload, dict):
+        request_payload = nested_payload
+    else:
+        reserved = {"decision_id", "rule_id", "reason", "summary", "cost_so_far"}
+        request_payload = {key: value for key, value in recorded.items() if key not in reserved}
+    recorded_summary = recorded.get("summary")
+    recorded_cost = recorded.get("cost_so_far")
+    return ApprovalRequest(
+        run_id=run_id,
+        decision=decision,
+        summary=recorded_summary if isinstance(recorded_summary, str) else fallback_summary,
+        cost_so_far=recorded_cost if isinstance(recorded_cost, dict) else fallback_cost,
+        request_payload=request_payload,
+    )
+
+
+def _finding_review_details(
+    context: FindingReviewContext | None, summary: str
+) -> tuple[str, dict[str, Any] | None]:
+    """Show the exact candidate and bounded closure scope in either Gate approval path."""
+    if context is None:
+        return summary, None
+    details = context.approval_details()
+    if context.eligible_finding_ids:
+        summary = (
+            "Review the linked findings against the exact bounded local descriptive profile "
+            "and decide whether this Run may close. This answer applies only to the recorded "
+            "audit snapshot and candidate evidence; it does not authorize another tool or "
+            "a model-training, evaluation, prediction, decision, or deployment action."
+        )
+    return summary, details
+
+
+def _is_contextual_findings_request(recorded: Mapping[str, Any]) -> bool:
+    """Identify requests whose scope requires a real human answer rather than automation."""
+    nested = recorded.get("request_payload")
+    payload = nested if isinstance(nested, dict) else recorded
+    context = payload.get("finding_review_context")
+    eligible = context.get("eligible_finding_ids") if isinstance(context, dict) else None
+    return isinstance(eligible, list | tuple) and bool(eligible)
+
+
+def _is_contextual_plan_request(recorded: Mapping[str, Any]) -> bool:
+    """Identify a plan proposal whose exact candidate must be answered by a human."""
+    return (
+        recorded.get("action_type") == "plan.proposed"
+        and isinstance(recorded.get("plan"), dict)
+        and isinstance(recorded.get("plan_review"), dict)
+    )
+
+
+def _has_authenticated_manual_approver(approver: Approver | None, human: Actor | None) -> bool:
+    """Return whether this callback is explicitly bound to an authenticated human identity."""
+    return (
+        approver is not None
+        and approver not in (auto_approve, auto_reject)
+        and human is not None
+        and human.kind is ActorKind.HUMAN
+        and human.authenticated
+    )
+
+
 def _answering_actor(approver: Approver | None, human: Actor | None) -> tuple[bool, Actor]:
     """Name who answered an approval request, and whether that answer is automatic.
 
@@ -179,8 +250,13 @@ class Gate:
         risk_level: str = "unknown",
         summary: str = "",
         cost_so_far: dict[str, Any] | None = None,
+        details: Mapping[str, Any] | None = None,
     ) -> PolicyDecision:
-        """Decide an action, record it, and run the approval flow when required."""
+        """Decide an action, record it, and run the approval flow when required.
+
+        ``details`` enriches only the human request, never the policy input or decision. Gate-owned
+        request fields such as the decision ID continue to override caller-supplied values.
+        """
         decision = self.engine.decide_action(
             run_id=self.log.run_id,
             subject_kind=subject_kind,
@@ -189,7 +265,7 @@ class Gate:
             payload=payload,
             risk_level=risk_level,
         )
-        return self._record(decision, summary or action_type, cost_so_far)
+        return self._record(decision, summary or action_type, cost_so_far, details=details)
 
     def authorize_execution(
         self,
@@ -338,11 +414,16 @@ class Gate:
         if self.approver is None:
             raise RuntimeError("resolving an approval requires an injected approver")
         events = self.log.events()
-        if not any(
-            event.type is EventType.HUMAN_APPROVAL_REQUESTED
-            and approval_names_decision(event.payload, decision.id)
-            for event in events
-        ):
+        matching_request = next(
+            (
+                event
+                for event in reversed(events)
+                if event.type is EventType.HUMAN_APPROVAL_REQUESTED
+                and approval_names_decision(event.payload, decision.id)
+            ),
+            None,
+        )
+        if matching_request is None:
             raise ValueError("policy decision has no pending approval request")
         if any(
             event.type is EventType.HUMAN_APPROVAL
@@ -350,12 +431,14 @@ class Gate:
             for event in events
         ):
             raise ValueError("approval request has already been resolved")
+        if (
+            _is_contextual_findings_request(matching_request.payload)
+            or _is_contextual_plan_request(matching_request.payload)
+        ) and not (_has_authenticated_manual_approver(self.approver, self.human)):
+            raise ValueError("this contextual review requires an authenticated human approver")
 
-        request = ApprovalRequest(
-            run_id=self.log.run_id,
-            decision=decision,
-            summary=summary,
-            cost_so_far=cost_so_far,
+        request = _reconstructed_approval_request(
+            self.log.run_id, decision, matching_request.payload, summary, cost_so_far
         )
         answer = self.approver(request)
         if not isinstance(answer, bool):
@@ -411,9 +494,13 @@ class Gate:
         *,
         summary: str = "audit findings",
         cost_so_far: dict[str, Any] | None = None,
+        review_context: FindingReviewContext | None = None,
     ) -> PolicyDecision:
         """Turn audit findings into the run-level decision, recorded like any other."""
-        decision = self.engine.decide_findings(run_id=self.log.run_id, findings=findings)
+        decision = self.engine.decide_findings(
+            run_id=self.log.run_id, findings=findings, review_context=review_context
+        )
+        summary, details = _finding_review_details(review_context, summary)
         if decision.decision is Decision.BLOCK:
             self.log.append(
                 EventType.AUDIT_BLOCK,
@@ -425,7 +512,7 @@ class Gate:
                 },
                 subject_id=decision.subject_id,
             )
-        return self._record(decision, summary, cost_so_far)
+        return self._record(decision, summary, cost_so_far, details=details)
 
     def escalate_rework(
         self,
@@ -502,59 +589,67 @@ class Gate:
         *,
         details: Mapping[str, Any] | None = None,
     ) -> PolicyDecision:
-        """Record the decision and, for a review, request approval per the Gate's mode.
+        """Persist a decision and apply the Gate's approval policy."""
+        return _record_gate_decision(self, decision, summary, cost_so_far, details=details)
 
-        A ``REQUIRE_HUMAN_REVIEW`` always emits ``human.approval_requested`` (carrying
-        ``cost_so_far``). In ``DEFERRED`` mode the Gate then returns the unresolved decision — no
-        approver is consulted — for an :class:`thymira.policies.approval.ApprovalService` to resolve
-        out of band. In ``SYNCHRONOUS`` mode an injected approver's answer is recorded as evidence.
-        ``details`` extend the request payload with caller facts; the Gate's own keys take
-        precedence.
 
-        A non-``bool`` answer from the approver is no answer (Ruling R16): no ``human.approval``
-        is written, so the request stays recorded and unanswered and this decision stays pending
-        for a real human to answer later. Never coerced to yes, never fabricated as a rejection.
-        """
-        self.log.append(
-            EventType.POLICY_DECISION,
-            Actor.system(),
-            decision.to_json_dict(),
-            subject_id=decision.subject_id,
-        )
-        # After the authoritative event, never instead of it: the score is a mirror that makes
-        # "how often did we BLOCK this week" a query in Langfuse rather than a script over every
-        # events.jsonl on disk. Nothing reads it back, and a backend that is off changes nothing.
-        score_run(
-            run_id=self.log.run_id,
-            name="policy.decision",
-            value=decision.decision.value,
-            data_type="CATEGORICAL",
-            comment=decision.rule_id,
-        )
-        if decision.decision is not Decision.REQUIRE_HUMAN_REVIEW:
-            return decision
-        request = ApprovalRequest(
-            run_id=self.log.run_id, decision=decision, summary=summary, cost_so_far=cost_so_far
-        )
-        self.log.append(
-            EventType.HUMAN_APPROVAL_REQUESTED,
-            Actor.system(),
-            _requested_payload(decision, summary, cost_so_far, details),
-            subject_id=decision.subject_id,
-        )
-        if self.mode is GateMode.DEFERRED or self.approver is None:
-            return decision
-        answer = self.approver(request)
-        if not isinstance(answer, bool):
-            # Never coerced to yes, never fabricated as a rejection: a rejection is final for the
-            # ticket and must come from a human, not from `bool("no")`. The request stays recorded
-            # and unanswered, and this decision stays pending.
-            return decision
-        automatic, actor = _answering_actor(self.approver, self.human)
-        self.log.append(
-            EventType.HUMAN_APPROVAL,
-            actor,
-            {"decision_id": decision.id, "approved": answer, "automatic": automatic},
-            subject_id=decision.subject_id,
-        )
+def _record_gate_decision(
+    gate: Gate,
+    decision: PolicyDecision,
+    summary: str,
+    cost_so_far: dict[str, Any] | None,
+    *,
+    details: Mapping[str, Any] | None = None,
+) -> PolicyDecision:
+    """Write the decision, score, request, and eligible answer as one Gate operation."""
+    gate.log.append(
+        EventType.POLICY_DECISION,
+        Actor.system(),
+        decision.to_json_dict(),
+        subject_id=decision.subject_id,
+    )
+    # After the authoritative event, never instead of it: the score is a mirror that makes
+    # "how often did we BLOCK this week" a query in Langfuse rather than a script over every
+    # events.jsonl on disk. Nothing reads it back, and a backend that is off changes nothing.
+    score_run(
+        run_id=gate.log.run_id,
+        name="policy.decision",
+        value=decision.decision.value,
+        data_type="CATEGORICAL",
+        comment=decision.rule_id,
+    )
+    if decision.decision is not Decision.REQUIRE_HUMAN_REVIEW:
         return decision
+    request_payload = _requested_payload(decision, summary, cost_so_far, details)
+    request = ApprovalRequest(
+        run_id=gate.log.run_id,
+        decision=decision,
+        summary=summary,
+        cost_so_far=cost_so_far,
+        request_payload=dict(details or {}),
+    )
+    gate.log.append(
+        EventType.HUMAN_APPROVAL_REQUESTED,
+        Actor.system(),
+        request_payload,
+        subject_id=decision.subject_id,
+    )
+    if gate.mode is GateMode.DEFERRED or gate.approver is None:
+        return decision
+    if (
+        _is_contextual_findings_request(request_payload)
+        or _is_contextual_plan_request(request_payload)
+    ) and not (_has_authenticated_manual_approver(gate.approver, gate.human)):
+        return decision
+    answer = gate.approver(request)
+    if not isinstance(answer, bool):
+        # Never coerced to yes or fabricated as rejection: the request stays pending for a human.
+        return decision
+    automatic, actor = _answering_actor(gate.approver, gate.human)
+    gate.log.append(
+        EventType.HUMAN_APPROVAL,
+        actor,
+        {"decision_id": decision.id, "approved": answer, "automatic": automatic},
+        subject_id=decision.subject_id,
+    )
+    return decision

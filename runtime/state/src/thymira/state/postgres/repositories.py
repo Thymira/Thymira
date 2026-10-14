@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from thymira.events import canonical_json
@@ -208,6 +209,7 @@ class PgSessionRepository:
         self,
         *,
         project_id: Id | None = None,
+        conversation: bool | None = None,
         limit: int = 50,
         cursor: str | None = None,
     ) -> Page[Session]:
@@ -215,6 +217,17 @@ class PgSessionRepository:
         conditions: list[sa.ColumnElement[bool]] = []
         if project_id is not None:
             conditions.append(tables.sessions.c.project_id == project_id)
+        if conversation is not None:
+            conversation_value = sa.cast(tables.sessions.c.document, JSONB).op("->>")(
+                "conversation"
+            )
+            if conversation:
+                conditions.append(conversation_value == "true")
+            else:
+                # Sessions written before Contract 0.10 omit the field and are standalone.
+                conditions.append(
+                    sa.or_(conversation_value == "false", conversation_value.is_(None))
+                )
         documents, next_cursor = _paginate(
             self._engine, tables.sessions, conditions=conditions, limit=limit, cursor=cursor
         )

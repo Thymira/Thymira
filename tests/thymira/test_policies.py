@@ -7,13 +7,16 @@ from typing import TYPE_CHECKING, Any, cast
 import pytest
 
 from thymira import observability
-from thymira.events import InMemoryEventLog
+from thymira.events import InMemoryEventLog, canonical_json, sha256_text
 from thymira.policies import (
     ActionRule,
     ApprovalRequest,
     Approver,
     BudgetRule,
     CapabilityRule,
+    FindingReviewCandidate,
+    FindingReviewContext,
+    FindingRule,
     Gate,
     ModelRule,
     Policy,
@@ -38,6 +41,7 @@ from thymira.schemas import (
     AuthorizationDecision,
     Decision,
     EventType,
+    Evidence,
     ExecutionAction,
     ExecutionConstraints,
     Framework,
@@ -55,7 +59,6 @@ CONFIDENT = RiskProfile(risk_level="high", activity_category="model_development"
 def _finding(
     severity: Severity, *, confidence: float = 0.5, evidence: bool = True, control: str = "X-1"
 ) -> AuditFinding:
-    from thymira.schemas import Evidence
 
     return AuditFinding(
         id=new_id("finding"),
@@ -68,6 +71,51 @@ def _finding(
         confidence=confidence,
         evidence=(Evidence(kind="event", ref="seq:1"),) if evidence else (),
     )
+
+
+def _finding_review_context(
+    engine: PolicyEngine,
+    finding: AuditFinding,
+    *,
+    supported: bool | None,
+    audit_complete: bool = True,
+) -> FindingReviewContext:
+    candidate = FindingReviewCandidate(
+        finding_id=finding.id,
+        control_id=finding.control_id,
+        title=finding.title,
+        finding=finding.finding,
+        severity=finding.severity,
+        evidence=finding.evidence,
+        supported=supported,
+        applicability_status="applicable",
+        verification_rationale="The available verification remains inconclusive.",
+        applicability_rationale="This candidate concerns the declared review scope.",
+        concrete_action="Review the source evidence.",
+    )
+    context = FindingReviewContext(
+        audit_completed_seq=10,
+        audit_completed_hash="a" * 64,
+        audit_revision=1,
+        audit_terminal_hash="b" * 64,
+        audit_terminal_seq=9,
+        report_sha256="c" * 64,
+        findings_sha256=sha256_text(canonical_json([finding.model_dump(mode="json")])),
+        policy_sha256=engine.policy_sha256,
+        run_snapshot_sha256="d" * 64,
+        artifact_manifest_sha256="e" * 64,
+        finding_ids=(finding.id,),
+        candidates=(candidate,),
+        eligible_finding_ids=(finding.id,) if supported is None else (),
+        audit_complete=audit_complete,
+        bounded_local_descriptive_scope=audit_complete,
+        scope_reason="unit-test bounded local descriptive scope",
+        scope_sha256="f" * 64,
+        context_sha256="0" * 64,
+    )
+    unsigned = context.model_dump(mode="json")
+    unsigned.pop("context_sha256")
+    return context.model_copy(update={"context_sha256": sha256_text(canonical_json(unsigned))})
 
 
 @pytest.fixture
@@ -574,6 +622,89 @@ def test_a_critical_finding_blocks_whatever_its_confidence_and_evidence(
         run_id=RUN,
         findings=[_finding(Severity.CRITICAL, confidence=confidence, evidence=evidence)],
     )
+
+    assert (decision.decision, decision.rule_id) == (Decision.BLOCK, "GOV-101")
+
+
+def test_only_agent_authored_indeterminate_critical_findings_can_reach_review(
+    engine: PolicyEngine,
+) -> None:
+    finding = _finding(Severity.CRITICAL).model_copy(update={"agent_id": "agent-auditor"})
+    review_context = _finding_review_context(engine, finding, supported=None)
+    reviewed = engine.decide_findings(run_id=RUN, findings=[finding], review_context=review_context)
+    assert (reviewed.decision, reviewed.rule_id) == (
+        Decision.REQUIRE_HUMAN_REVIEW,
+        "GOV-101-INDETERMINATE",
+    )
+
+    deterministic = finding.model_copy(update={"agent_id": None})
+    deterministic_context = _finding_review_context(engine, deterministic, supported=None)
+    blocked_deterministic = engine.decide_findings(
+        run_id=RUN, findings=[deterministic], review_context=deterministic_context
+    )
+    assert (blocked_deterministic.decision, blocked_deterministic.rule_id) == (
+        Decision.BLOCK,
+        "GOV-101",
+    )
+
+
+@pytest.mark.parametrize("supported", [True, False])
+def test_confirmed_or_incompatible_critical_verification_keeps_gov_101_block(
+    engine: PolicyEngine, supported: bool
+) -> None:
+    finding = _finding(Severity.CRITICAL).model_copy(update={"agent_id": "agent-auditor"})
+    context = _finding_review_context(engine, finding, supported=supported)
+
+    decision = engine.decide_findings(run_id=RUN, findings=[finding], review_context=context)
+
+    assert (decision.decision, decision.rule_id) == (Decision.BLOCK, "GOV-101")
+
+
+def test_incomplete_review_context_blocks_even_when_no_findings_remain(
+    engine: PolicyEngine,
+) -> None:
+    finding = _finding(Severity.CRITICAL).model_copy(update={"agent_id": "agent-auditor"})
+    context = _finding_review_context(
+        engine, finding, supported=None, audit_complete=False
+    ).model_copy(update={"finding_ids": (), "candidates": (), "eligible_finding_ids": ()})
+    unsigned = context.model_dump(mode="json")
+    unsigned.pop("context_sha256")
+    context = context.model_copy(update={"context_sha256": sha256_text(canonical_json(unsigned))})
+
+    decision = engine.decide_findings(run_id=RUN, findings=(), review_context=context)
+
+    assert (decision.decision, decision.rule_id) == (Decision.BLOCK, "audit_incomplete")
+
+
+def test_overlay_named_gov_101_does_not_receive_indeterminate_exception() -> None:
+    finding = _finding(Severity.CRITICAL).model_copy(update={"agent_id": "agent-auditor"})
+    overlay = Policy(
+        name="same-id-overlay",
+        version="1.0",
+        finding_rules=(
+            FindingRule(
+                id="GOV-101",
+                decision=Decision.BLOCK,
+                reason="overlay prohibition scoped to this control",
+                min_severity=Severity.CRITICAL,
+                control_ids=(finding.control_id,),
+            ),
+        ),
+    )
+    engine = PolicyEngine(load_default_policy("base").merged_with(overlay))
+    context = _finding_review_context(engine, finding, supported=None)
+
+    decision = engine.decide_findings(run_id=RUN, findings=[finding], review_context=context)
+
+    assert (decision.decision, decision.rule_id) == (Decision.BLOCK, "GOV-101")
+
+
+def test_legacy_gate_without_review_context_keeps_critical_indeterminate_blocked(
+    engine: PolicyEngine,
+) -> None:
+    finding = _finding(Severity.CRITICAL).model_copy(update={"agent_id": "agent-auditor"})
+
+    decision = Gate(engine, InMemoryEventLog(RUN)).review_findings((finding,))
 
     assert (decision.decision, decision.rule_id) == (Decision.BLOCK, "GOV-101")
 

@@ -8,11 +8,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import Field
+from pydantic import Field, StrictBool
 
 from thymira.schemas import (
     AuditFinding,
     Decision,
+    Evidence,
     ExecutionConstraints,
     Framework,
     SandboxMode,
@@ -76,6 +77,67 @@ class ToolCapability(ThymiraModel):
     external_effects: tuple[str, ...] = ()
     reversibility: str = "reversible"
     sandbox_mode: SandboxMode | None = None
+
+
+class FindingReviewCandidate(ThymiraModel):
+    """One MIRA applicability assessment carried to Core's findings Gate.
+
+    ``supported`` is deliberately strict: old/non-strict Pydantic payloads may have coerced
+    strings or integers into booleans before this boundary, so Core only constructs this model
+    after checking the raw persisted value.
+    """
+
+    finding_id: str = Field(min_length=1)
+    control_id: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+    finding: str = Field(min_length=1)
+    severity: Severity
+    evidence: tuple[Evidence, ...] = ()
+    supported: StrictBool | None
+    applicability_status: Literal["applicable", "not_applicable", "undetermined"]
+    verification_rationale: str
+    applicability_rationale: str
+    concrete_action: str
+    activity_profile_id: str | None = None
+    activity_profile_version: int | None = Field(default=None, ge=1)
+    snapshot_head_seq: int | None = Field(default=None, ge=0)
+    snapshot_head_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+
+class FindingReviewContext(ThymiraModel):
+    """Exact validated audit and local capability scope for an indeterminate finding review.
+
+    Core creates this from the hash-chained MIRA report and registered capabilities. It carries
+    no tool authorization; it only lets the finding policy distinguish a bounded descriptive
+    question from a critical finding that still requires the default prohibition.
+    """
+
+    audit_completed_seq: int = Field(ge=0)
+    audit_completed_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    audit_revision: int = Field(ge=1)
+    audit_terminal_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    audit_terminal_seq: int = Field(ge=0)
+    report_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    findings_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    profile_id: str | None = None
+    profile_version: int | None = Field(default=None, ge=1)
+    run_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    artifact_manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    action_event_hashes: tuple[str, ...] = ()
+    capabilities: tuple[ToolCapability, ...] = ()
+    finding_ids: tuple[str, ...] = ()
+    candidates: tuple[FindingReviewCandidate, ...] = ()
+    eligible_finding_ids: tuple[str, ...] = ()
+    audit_complete: StrictBool
+    bounded_local_descriptive_scope: StrictBool
+    scope_reason: str
+    scope_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    context_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    def approval_details(self) -> dict[str, object]:
+        """Return the human-readable evidence and exact binding for an approval request."""
+        return {"finding_review_context": self.model_dump(mode="json")}
 
 
 class ActionRule(ThymiraModel):

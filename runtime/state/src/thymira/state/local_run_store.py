@@ -41,11 +41,15 @@ from thymira.schemas import (
     RunStatus,
     id_kind,
 )
-from thymira.state._atomic import fsync_directory, replace_with_retry
+from thymira.state._atomic import replace_with_retry
+from thymira.state._run_projection import write_run_projection
 from thymira.state.repositories import Page, _decode_cursor, _encode_cursor, _validate_limit
+from thymira.state.review_lock import review_resolution_lock
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from thymira.state._lifecycle_lock import FileLock
 
 _EVENTS_FILE = "events.jsonl"
 _PROJECTION_FILE = "run.json"
@@ -56,8 +60,8 @@ _EXPORTS_DIR = "exports"
 class LocalRunStore:
     """Persist Run evidence under a local ``runs/<run_id>`` directory.
 
-    ``append`` serialises concurrent writers to the same Run with an in-process lock, so two
-    threads appending at once cannot corrupt the hash chain; a stale ``expected_version`` still
+    ``get``, ``version`` and ``append`` share an in-process Run lock, so projection rebuilds
+    cannot overwrite concurrent appends; a stale ``expected_version`` still
     loses the race with a clean ``ValueError`` instead of a torn write. A successful event append
     and a projection replacement remain separate file operations, so reopening the Run verifies
     the log and rebuilds the projection if needed.
@@ -76,6 +80,13 @@ class LocalRunStore:
     def permission_evidence(self) -> StoragePermissionEvidence:
         """Return the verified OS permission evidence for this store's root directory."""
         return self._permission_evidence
+
+    def review_lock(self, run_id: str) -> FileLock:
+        """Return the nonblocking OS lock for resolving one existing Run's review."""
+        run_dir = self._run_dir(run_id)
+        if not run_dir.is_dir():
+            raise FileNotFoundError(f"run {run_id} does not exist")
+        return review_resolution_lock(run_dir)
 
     def _lock_for(self, run_id: str) -> threading.Lock:
         """Return this Run's append lock, creating it on first use."""
@@ -176,19 +187,21 @@ class LocalRunStore:
 
     def get(self, run_id: str) -> Run:
         """Return the Run reconstructed from its verified authoritative history."""
-        events = self._verified_events(run_id)
-        projection = self._projection_from_events(run_id, events)
-        if self._read_projection(run_id) != projection:
-            self._write_projection(run_id, projection)
-        return Run.model_validate(projection["run"])
+        with self._lock_for(run_id):
+            events = self._verified_events(run_id)
+            projection = self._projection_from_events(run_id, events)
+            if self._read_projection(run_id) != projection:
+                self._write_projection(run_id, projection)
+            return Run.model_validate(projection["run"])
 
     def version(self, run_id: str) -> int:
         """Return the current event-derived version for ``run_id``."""
-        events = self._verified_events(run_id)
-        projection = self._projection_from_events(run_id, events)
-        if self._read_projection(run_id) != projection:
-            self._write_projection(run_id, projection)
-        return int(projection["version"])
+        with self._lock_for(run_id):
+            events = self._verified_events(run_id)
+            projection = self._projection_from_events(run_id, events)
+            if self._read_projection(run_id) != projection:
+                self._write_projection(run_id, projection)
+            return int(projection["version"])
 
     def append(
         self,
@@ -538,36 +551,7 @@ class LocalRunStore:
 
     def _write_projection(self, run_id: str, projection: dict[str, Any]) -> None:
         """Replace ``run.json`` atomically within its Run directory."""
-        run_dir = self._run_dir(run_id)
-        target = run_dir / _PROJECTION_FILE
-        secure_directory(run_dir)
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            newline="\n",
-            dir=run_dir,
-            prefix=".run-",
-            suffix=".tmp",
-            delete=False,
-        ) as handle:
-            temporary = Path(handle.name)
-            secure_file(temporary)
-            handle.write(canonical_json(projection) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        try:
-            replace_with_retry(temporary, target)
-            secure_file(target)
-        finally:
-            if temporary.exists():
-                temporary.unlink()
-        try:
-            readback = json.loads(target.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise ValueError(f"run {run_id}: projection read-back failed") from exc
-        if readback != projection:
-            raise ValueError(f"run {run_id}: projection read-back differs from derived state")
-        fsync_directory(run_dir)
+        write_run_projection(self._run_dir(run_id), projection)
 
 
 def _export_payload(payload: object) -> object:

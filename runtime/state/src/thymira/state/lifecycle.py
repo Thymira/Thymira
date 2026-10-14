@@ -109,6 +109,12 @@ class LifecycleRepository(Protocol):
         """Materialise and link a staged publication, returning its live Run handle."""
         ...
 
+    def recover_publications(
+        self, *, session_id: str | None = None
+    ) -> tuple[PublicationReceipt, ...]:
+        """Complete staged publications, optionally limited to one Session."""
+        ...
+
     def assert_owner(self, owner: RunOwnerHandle) -> None:
         """Validate that a public owner identity still has its private live lock resource."""
         ...
@@ -601,12 +607,15 @@ class LocalLifecycleRepository:
                 return key_lock
         raise OwnerBusyError(f"publication idempotency lock is busy: {key}")
 
-    def recover_publications(self) -> tuple[PublicationReceipt, ...]:
+    def recover_publications(
+        self, *, session_id: str | None = None
+    ) -> tuple[PublicationReceipt, ...]:
         """Finish valid private publications after a process crash.
 
         Recovery acquires the same per-Session lock and epoch-fenced Run owner as normal commit.
-        Malformed private manifests are left for an operator rather than being mistaken for a
-        valid publication or silently deleted.
+        When ``session_id`` is supplied, only its pending publications are finished. Malformed
+        private manifests are left for an operator rather than being mistaken for a valid
+        publication or silently deleted.
         """
         receipts: list[PublicationReceipt] = []
         for path in sorted(self._files.publications.glob("*.json")):
@@ -615,6 +624,8 @@ class LocalLifecycleRepository:
                 continue
             try:
                 prepared = self._files.parse_prepared(manifest)
+                if session_id is not None and prepared.run.session_id != session_id:
+                    continue
                 handle = self.commit_publication(prepared)
             except (LifecycleError, OSError, TypeError, ValueError):
                 continue
