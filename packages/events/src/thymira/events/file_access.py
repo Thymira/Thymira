@@ -124,26 +124,30 @@ def _secure_windows(path: Path) -> StoragePermissionEvidence:
     if not path.exists():
         raise StoragePermissionError(f"cannot secure missing Windows path {path}")
     try:
+        is_directory = path.is_dir()
         sid = _current_user_sid()
-        inheritance = "OICI" if path.is_dir() else ""
+        inheritance = "OICI" if is_directory else ""
         ace_flags = f"{inheritance};" if inheritance else ";"
         sddl = f"D:P(A;{ace_flags}FA;;;{sid})(A;{ace_flags}FA;;;SY)(A;{ace_flags}FA;;;BA)"
         descriptor, dacl = _descriptor_dacl(sddl)
         try:
             security_info = _DACL_SECURITY_INFORMATION | _PROTECTED_DACL_SECURITY_INFORMATION
-            result = _ADVAPI.SetNamedSecurityInfoW(
-                str(path),
-                _SE_FILE_OBJECT,
-                security_info,
-                None,
-                None,
-                dacl,
-                None,
-            )
-            if result != 0:
-                raise StoragePermissionError(
-                    f"cannot set Windows ACL for {path}: winerror={result}"
+            if is_directory:
+                _set_directory_dacl(path, dacl, security_info)
+            else:
+                result = _ADVAPI.SetNamedSecurityInfoW(
+                    str(path),
+                    _SE_FILE_OBJECT,
+                    security_info,
+                    None,
+                    None,
+                    dacl,
+                    None,
                 )
+                if result != 0:
+                    raise StoragePermissionError(
+                        f"cannot set Windows ACL for {path}: winerror={result}"
+                    )
         finally:
             _KERNEL32.LocalFree(descriptor)
         verified = _read_sddl(path)
@@ -151,7 +155,7 @@ def _secure_windows(path: Path) -> StoragePermissionEvidence:
         raise
     except Exception as exc:  # fail closed when native APIs misbehave
         raise StoragePermissionError(f"cannot verify Windows ACL for {path}") from exc
-    expected = _expected_sddl(sid, path.is_dir())
+    expected = _expected_sddl(sid, is_directory)
     if verified != expected:
         raise StoragePermissionError(f"Windows ACL is not restrictive for {path}")
     return StoragePermissionEvidence(path, "nt", verified)
@@ -195,6 +199,14 @@ _TOKEN_USER = 1
 _SDDL_REVISION_1 = 1
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
 _INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF
+_INVALID_HANDLE_VALUE = wintypes.HANDLE(-1).value
+_MAXIMUM_ALLOWED = 0x02000000
+_FILE_SHARE_READ = 0x00000001
+_FILE_SHARE_WRITE = 0x00000002
+_FILE_SHARE_DELETE = 0x00000004
+_OPEN_EXISTING = 3
+_FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
+_FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
 _MODE_DIRECTORY = 0o700
 _MODE_FILE = 0o600
 
@@ -242,6 +254,16 @@ if _ADVAPI is not None and _KERNEL32 is not None:
         wintypes.LPVOID,
     ]
     _ADVAPI.SetNamedSecurityInfoW.restype = wintypes.DWORD
+    _ADVAPI.SetSecurityInfo.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.LPVOID,
+        wintypes.LPVOID,
+        wintypes.LPVOID,
+    ]
+    _ADVAPI.SetSecurityInfo.restype = wintypes.DWORD
     _ADVAPI.GetNamedSecurityInfoW.argtypes = [
         wintypes.LPCWSTR,
         wintypes.DWORD,
@@ -266,6 +288,17 @@ if _ADVAPI is not None and _KERNEL32 is not None:
     _KERNEL32.LocalFree.restype = wintypes.LPVOID
     _KERNEL32.GetFileAttributesW.argtypes = [wintypes.LPCWSTR]
     _KERNEL32.GetFileAttributesW.restype = wintypes.DWORD
+    _KERNEL32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    _KERNEL32.CreateFileW.restype = wintypes.HANDLE
+    _KERNEL32.CloseHandle.argtypes = [wintypes.HANDLE]
 
 
 class _SidAndAttributes(ctypes.Structure):
@@ -370,6 +403,41 @@ def _read_sddl(path: Path) -> str:
             _KERNEL32.LocalFree(rendered)
     finally:
         _KERNEL32.LocalFree(descriptor)
+
+
+def _set_directory_dacl(path: Path, dacl: wintypes.LPVOID, security_info: int) -> None:
+    """Set one directory DACL without propagating its inheritable ACEs to existing children."""
+    if _ADVAPI is None or _KERNEL32 is None:
+        raise StoragePermissionError("Windows security APIs are unavailable")
+    handle = _KERNEL32.CreateFileW(
+        str(path),
+        _MAXIMUM_ALLOWED,
+        _FILE_SHARE_READ | _FILE_SHARE_WRITE | _FILE_SHARE_DELETE,
+        None,
+        _OPEN_EXISTING,
+        _FILE_FLAG_BACKUP_SEMANTICS | _FILE_FLAG_OPEN_REPARSE_POINT,
+        None,
+    )
+    if handle == _INVALID_HANDLE_VALUE:
+        raise StoragePermissionError(
+            f"cannot open local storage directory {path}: winerror={ctypes.get_last_error()}"
+        )
+    try:
+        # SetSecurityInfo normally propagates inheritable ACEs to existing children. Microsoft
+        # documents that propagation is suppressed when the handle was opened with MAXIMUM_ALLOWED.
+        result = _ADVAPI.SetSecurityInfo(
+            handle,
+            _SE_FILE_OBJECT,
+            security_info,
+            None,
+            None,
+            dacl,
+            None,
+        )
+        if result != 0:
+            raise StoragePermissionError(f"cannot set Windows ACL for {path}: winerror={result}")
+    finally:
+        _KERNEL32.CloseHandle(handle)
 
 
 def _expected_sddl(sid: str, directory: bool) -> str:

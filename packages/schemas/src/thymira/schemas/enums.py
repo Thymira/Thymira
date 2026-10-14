@@ -206,6 +206,7 @@ class EventType(StrEnum):
     """The Event API vocabulary (baseline, section 8) plus the governance events it implies."""
 
     RUN_STARTED = "run.started"
+    RUNTIME_ATTACHED = "runtime.attached"
     RUN_COMPLETED = "run.completed"
     RUN_FAILED = "run.failed"
     RUN_TRANSITIONED = "run.transitioned"
@@ -215,6 +216,7 @@ class EventType(StrEnum):
     AGENT_MESSAGE = "agent.message"
     SUBAGENT_SETTLED = "subagent.settled"
     MODEL_SELECTED = "model.selected"
+    SESSION_MODEL_USAGE = "session.model_usage"
     MODEL_ROUTE_POLICY_SNAPSHOTTED = "model.route_policy_snapshotted"
     MODEL_ROUTE_DENIED = "model.route_denied"
     TOOL_STARTED = "tool.started"

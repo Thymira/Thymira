@@ -37,6 +37,13 @@ from thymira.schemas.board import (
     TodoState,
     ToolRepeatState,
 )
+from thymira.schemas.conversation import (
+    ConversationInput,
+    ModelWorkIntent,
+    is_explanatory_model_request,
+    model_work_appears_only_in_quoted_text,
+    resolve_model_work_intent,
+)
 from thymira.schemas.credentials import is_credential_environment_name
 from thymira.schemas.enums import (
     RUN_TRANSITIONS,
@@ -132,7 +139,7 @@ from thymira.schemas.request_ledger import (
     SurfaceOperation,
 )
 from thymira.schemas.risk import RiskAssessment, RiskLevel
-from thymira.schemas.run import Run, Session
+from thymira.schemas.run import ConversationTurn, Run, Session, SessionConversation
 from thymira.schemas.run_state import (
     CompositeRunState,
     RunCondition,
@@ -162,7 +169,7 @@ from thymira.schemas.tool_refusals import (
 )
 from thymira.schemas.workspace import WorkspaceRegistration
 
-CONTRACT_VERSION = "0.9"
+CONTRACT_VERSION = "0.10"
 
 __all__ = [
     "AGENT_ALLOWLIST_REFUSAL",
@@ -206,6 +213,8 @@ __all__ = [
     "ControlInput",
     "ControlInputKind",
     "ControlInputState",
+    "ConversationInput",
+    "ConversationTurn",
     "DagBoard",
     "DagNode",
     "DatasetConfig",
@@ -240,6 +249,7 @@ __all__ = [
     "JsonValue",
     "Layer",
     "ModelRoutePolicy",
+    "ModelWorkIntent",
     "OutboxNotification",
     "OwnerReleaseReason",
     "PackBinding",
@@ -280,6 +290,7 @@ __all__ = [
     "SandboxMode",
     "SecretReference",
     "Session",
+    "SessionConversation",
     "SettingsSnapshot",
     "Severity",
     "StopReason",
@@ -315,9 +326,11 @@ __all__ = [
     "constraint_refusals",
     "id_kind",
     "is_credential_environment_name",
+    "is_explanatory_model_request",
     "new_id",
     "no_match_refusal",
     "read_required_refusal",
+    "resolve_model_work_intent",
     "stale_version_refusal",
     "utc_now",
 ]

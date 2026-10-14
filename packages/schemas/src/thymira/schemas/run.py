@@ -7,9 +7,12 @@ from datetime import datetime
 from pydantic import Field
 
 from thymira.schemas.base import ThymiraModel, utc_now
+from thymira.schemas.conversation import ConversationDiagnostic, ConversationInput
 from thymira.schemas.enums import Decision, RunStatus, can_transition
 from thymira.schemas.ids import Id
 from thymira.schemas.model_routes import ModelRoutePolicy
+from thymira.schemas.run_state import RunState
+from thymira.schemas.session_chat import SessionDiscussion
 
 
 class Session(ThymiraModel):
@@ -22,6 +25,8 @@ class Session(ThymiraModel):
     id: Id
     project_id: Id
     client: str = Field(min_length=1, description="cli, web, vscode, mcp, sdk, …")
+    title: str = Field(default="", max_length=200)
+    conversation: bool = False
     created_at: datetime = Field(default_factory=utc_now)
     run_ids: tuple[Id, ...] = ()
     model_route_policy: ModelRoutePolicy = Field(default_factory=ModelRoutePolicy.unavailable)
@@ -62,6 +67,7 @@ class Run(ThymiraModel):
     final_decision: Decision | None = None
     error: str | None = None
     model_route_policy: ModelRoutePolicy = Field(default_factory=ModelRoutePolicy.unavailable)
+    conversation: ConversationInput | None = None
 
     def with_status(self, status: RunStatus, *, at: datetime | None = None) -> Run:
         """Return a copy in ``status``; raises ``ValueError`` on a forbidden transition."""
@@ -75,3 +81,24 @@ class Run(ThymiraModel):
         if status.is_terminal:
             updates["completed_at"] = stamp
         return self.model_copy(update=updates)
+
+
+class ConversationTurn(ThymiraModel):
+    """One persisted user request and its verified assistant summary, if available."""
+
+    id: Id
+    ordinal: int = Field(ge=1)
+    user_message: str = Field(min_length=1, max_length=16_000)
+    assistant_message: str | None = None
+    terminal_diagnostic: ConversationDiagnostic | None = None
+    run: Run
+    state: RunState
+
+
+class SessionConversation(ThymiraModel):
+    """A Session view reconstructed from its Runs and verified event logs."""
+
+    session: Session
+    turns: tuple[ConversationTurn, ...] = ()
+    active_run_id: Id | None = None
+    discussions: tuple[SessionDiscussion, ...] = ()

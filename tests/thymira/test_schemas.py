@@ -23,6 +23,7 @@ from thymira.schemas import (
     Experiment,
     Framework,
     Layer,
+    ModelWorkIntent,
     PolicyDecision,
     ProjectConfig,
     Run,
@@ -36,6 +37,7 @@ from thymira.schemas import (
     can_transition,
     id_kind,
     new_id,
+    resolve_model_work_intent,
 )
 
 SHA = "a" * 64
@@ -48,7 +50,7 @@ def _run() -> Run:
 
 
 def test_contract_version_is_declared() -> None:
-    assert CONTRACT_VERSION == "0.9"
+    assert CONTRACT_VERSION == "0.10"
 
 
 def test_ids_are_prefixed_random_and_typed() -> None:
@@ -321,3 +323,58 @@ def test_a_project_config_rejects_two_datasets_with_the_same_name() -> None:
                 ],
             }
         )
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("Run a grid search.", ModelWorkIntent.TRAIN_NEW),
+        ("Haz una búsqueda en rejilla.", ModelWorkIntent.TRAIN_NEW),
+        ("Train a model now.", ModelWorkIntent.TRAIN_NEW),
+        ("Train only one model.", ModelWorkIntent.TRAIN_NEW),
+        ("Never train a new model; only do an EDA.", ModelWorkIntent.GENERAL),
+        ("Nunca entrenes un modelo; solo haz un EDA.", ModelWorkIntent.GENERAL),
+        (
+            "Evaluate the trained model on the registered dataset.",
+            ModelWorkIntent.EVALUATE_EXISTING,
+        ),
+        ("I trained a model yesterday; calculate its metrics.", ModelWorkIntent.EVALUATE_EXISTING),
+        (
+            "Without training a new model, evaluate the existing classifier.",
+            ModelWorkIntent.EVALUATE_EXISTING,
+        ),
+    ],
+)
+def test_model_work_intent_keeps_request_scope_and_verb_time(message, expected):
+    assert resolve_model_work_intent(message) is expected
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Que el modelo no sea entrenado.",
+        "El modelo no debe ser entrenado.",
+    ],
+)
+def test_negative_passive_training_never_authorizes_training(message):
+    assert resolve_model_work_intent(message) is not ModelWorkIntent.TRAIN_NEW
+
+
+def test_later_training_restriction_cannot_inherit_linked_training_request():
+    assert (
+        resolve_model_work_intent(
+            "Do not train; only report metrics.",
+            ("Train a new classifier on german_credit.",),
+        )
+        is ModelWorkIntent.CLARIFY
+    )
+
+
+def test_current_scope_correction_preserves_linked_training_restriction():
+    assert (
+        resolve_model_work_intent(
+            "Train a classifier.",
+            ("Do not train; instead do an EDA on german_credit.",),
+        )
+        is ModelWorkIntent.CLARIFY
+    )

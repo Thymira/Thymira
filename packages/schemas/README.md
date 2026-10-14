@@ -23,6 +23,12 @@ integration is partial; the local JSON/JSONL semantics are documented in
 `Event.surface` (`EventSurface`) and the `ToolCall` sandbox fields (`sandbox_mode`,
 `sandbox_enforcement`) remain in place.
 
+Contract 0.10 adds backward-compatible `Session.title`, `Session.conversation`, nullable
+`Run.conversation` input metadata, and `ConversationTurn`/`SessionConversation` views. Existing
+records without these fields still load with their original standalone behavior. See
+[conversation sessions](../../docs/contracts/conversation-sessions.md) for the Session/Run
+relationship and persistence semantics.
+
 ## Rules
 
 `tool_refusals` provides pure refusal wording and facts derived from `ExecutionConstraints`.
