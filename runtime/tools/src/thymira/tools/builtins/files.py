@@ -5,20 +5,24 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path, PureWindowsPath
-from typing import Any
-
-from pydantic import BaseModel, Field
+from typing import TYPE_CHECKING, Any
 
 from thymira.events import sha256_bytes, sha256_text
 from thymira.policies import ToolCapability
-from thymira.schemas import ArtifactKind
 from thymira.tools.artifact_media import (
     infer_artifact_media_type,
     infer_text_artifact_media_type,
 )
 from thymira.tools.artifact_validation import validate_report_kind
-from thymira.tools.builtins.argument_contracts import DESCRIPTION_FIELD, Description
+from thymira.tools.builtins.argument_contracts import DESCRIPTION_FIELD
 from thymira.tools.builtins.discovery import discovery_persistence_error, persist_discovery
+from thymira.tools.builtins.file_arguments import READ_DEFAULT_LIMIT as _READ_DEFAULT_LIMIT
+from thymira.tools.builtins.file_arguments import (
+    EditFileArguments,
+    ListFilesArguments,
+    ReadFileArguments,
+    WriteFileArguments,
+)
 from thymira.tools.builtins.file_contracts import FileToolContract
 from thymira.tools.builtins.freshness import FreshnessPolicy, ReadLedger
 from thymira.tools.builtins.output_bounds import (
@@ -42,8 +46,10 @@ from thymira.tools.results import (
     FileWriteValue,
 )
 
+if TYPE_CHECKING:
+    from pydantic import BaseModel
+
 _MAX_WRITE_BYTES = 1024 * 1024
-_READ_DEFAULT_LIMIT = 2000
 LIST_FILES_CAP = 100
 _SCRATCH_DIR_NAME = ".thymira"
 
@@ -101,56 +107,6 @@ def _reject_scratch_directory(relative: str) -> None:
             f"{relative!r} is inside {_SCRATCH_DIR_NAME}/, the run_python scratch directory; "
             "write_file and edit_file may not target it"
         )
-
-
-class ReadFileArguments(BaseModel):
-    """Arguments for read_file."""
-
-    path: str = Field(min_length=1)
-    offset: int = Field(default=1, ge=1, description="1-based first line to return.")
-    limit: int = Field(
-        default=_READ_DEFAULT_LIMIT,
-        ge=1,
-        le=20_000,
-        description="Maximum number of lines to return. Defaults to 2000.",
-    )
-
-
-class WriteFileArguments(BaseModel):
-    """Arguments for write_file."""
-
-    path: str = Field(min_length=1)
-    content: str
-    description: Description = DESCRIPTION_FIELD
-    kind: ArtifactKind | None = Field(
-        default=None,
-        description="When set, also register the written file as an Artifact of this kind.",
-    )
-
-
-class EditFileArguments(BaseModel):
-    """Arguments for edit_file."""
-
-    path: str = Field(min_length=1)
-    old_string: str = Field(
-        min_length=1, description="Literal text to replace. Must match exactly."
-    )
-    new_string: str = Field(
-        description="Literal replacement text. Use an empty string to delete the match."
-    )
-    replace_all: bool = Field(
-        default=False,
-        description=(
-            "Replace all matches. Defaults to false; then old_string must appear exactly once."
-        ),
-    )
-    description: Description = DESCRIPTION_FIELD
-
-
-class ListFilesArguments(BaseModel):
-    """Arguments for list_files."""
-
-    path: str = "."
 
 
 def _read_capability() -> ToolCapability:
@@ -409,7 +365,10 @@ class WriteFile:
                 media_type=artifact_media_type,
             )[0]
             artifact_ids = (artifact.id,)
-        text = json.dumps({"path": arguments["path"], "bytes": len(encoded)}, sort_keys=True)
+        visible: dict[str, str | int] = {"path": arguments["path"], "bytes": len(encoded)}
+        if artifact_ids:
+            visible["artifact_id"] = artifact_ids[0]
+        text = json.dumps(visible, sort_keys=True)
         return ToolResult(
             success=True,
             stdout=text,

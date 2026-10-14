@@ -26,6 +26,8 @@ if TYPE_CHECKING:
         ToolCall,
     )
     from thymira.state import ArtifactStore
+    from thymira.tools.builtins.python_arguments import RunPythonOutputArtifact
+    from thymira.tools.publication_progress import PythonPublicationProgress
     from thymira.tools.sandbox.base import ResolvedExecutionSpec, WorkspaceQuotaEvidence
     from thymira.tools.sandbox.termination import TerminationEvidence
 
@@ -195,6 +197,10 @@ class ToolResult:
     """The execution budget when this result represents a timeout."""
     aborted: bool = False
     """Whether the child was actively terminated when producing this result."""
+    publication_progress: PythonPublicationProgress | None = None
+    """Validated Python output identities retained when atomic publication fails."""
+    output_declarations: tuple[RunPythonOutputArtifact, ...] | None = None
+    """Validated logical Python outputs bound to this call, excluding manifest bookkeeping."""
 
 
 class ToolExecutionError(RuntimeError):

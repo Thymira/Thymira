@@ -17,11 +17,11 @@ if TYPE_CHECKING:
 from thymira.policies import ToolCapability
 from thymira.schemas import ArtifactKind
 from thymira.tools.builtins.argument_contracts import DESCRIPTION_FIELD, Description
+from thymira.tools.builtins.profile_plots import publish_profile_plots
 from thymira.tools.datasets import DatasetSchema, load_dataset, schema_artifact_name
 from thymira.tools.models import ToolInvocation, ToolResult
+from thymira.tools.profile_paths import PROFILE_MIN_CORRELATION_COLUMNS, profile_json_path
 from thymira.tools.results import DatasetAnalysisValue, ProfileValue, ToolValue
-
-_MIN_CORRELATION_COLUMNS = 2
 
 
 class DatasetArguments(BaseModel):
@@ -31,6 +31,15 @@ class DatasetArguments(BaseModel):
     description: Description = DESCRIPTION_FIELD
     columns: tuple[str, ...] | None = None
     max_rows: int = Field(default=100_000, gt=0, le=1_000_000)
+
+
+class ProfileDatasetArguments(DatasetArguments):
+    """Request optional registered PNGs alongside the independently verifiable profile."""
+
+    include_plots: bool = Field(
+        default=False,
+        description="Publish PNG distributions and numeric correlations for a basic EDA.",
+    )
 
 
 def _frame(invocation: ToolInvocation, arguments: dict[str, Any]) -> pl.DataFrame:
@@ -175,9 +184,9 @@ class ProfileDataset:
         "Create a deterministic JSON profile (missingness, distributions, numeric correlations) "
         "of a registered dataset and save it as a report artifact. Use it before modelling; it "
         "is the only correct way to look at a dataset, because the profile is bounded and "
-        "reproducible."
+        "reproducible. Set include_plots=true for a basic EDA with registered PNG charts."
     )
-    arguments_model: type[BaseModel] = DatasetArguments
+    arguments_model: type[BaseModel] = ProfileDatasetArguments
     result_model: type[BaseModel] = ProfileValue
     capability: ToolCapability = field(
         default_factory=lambda: ToolCapability(
@@ -190,7 +199,7 @@ class ProfileDataset:
 
     def execute(self, invocation: ToolInvocation, arguments: dict[str, Any]) -> ToolResult:
         """Profile the selected registered dataset."""
-        effective_arguments = DatasetArguments.model_validate(arguments).model_dump()
+        effective_arguments = ProfileDatasetArguments.model_validate(arguments).model_dump()
         source = _profile_source(invocation, effective_arguments)
         frame = _frame(invocation, effective_arguments)
         columns: dict[str, Any] = {}
@@ -207,8 +216,11 @@ class ProfileDataset:
             if _numeric(series):
                 columns[name]["histogram"] = _histogram(series)
         correlations: dict[str, Any] = {}
-        if len(numeric_names) >= _MIN_CORRELATION_COLUMNS:
-            correlations = frame.select(numeric_names).corr().to_dict(as_series=False)
+        if len(numeric_names) >= PROFILE_MIN_CORRELATION_COLUMNS:
+            matrix = frame.select(numeric_names).corr().to_dict(as_series=False)
+            correlations = {
+                name: [_finite(value) for value in values] for name, values in matrix.items()
+            }
         payload = {
             "profile_version": 1,
             "source": source,
@@ -217,9 +229,11 @@ class ProfileDataset:
             "columns": columns,
             "correlation": correlations,
         }
+        if effective_arguments["include_plots"]:
+            return publish_profile_plots(invocation, payload)
         return _save_report(
             invocation,
-            f"profile/{effective_arguments['dataset']}.json",
+            profile_json_path(effective_arguments["dataset"]),
             payload,
             ArtifactKind.REPORT,
             ProfileValue(

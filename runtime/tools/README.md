@@ -20,7 +20,7 @@ validated model-visible arguments, and spills large outputs. API/export surfaces
 one-shot approval of its exact validated arguments; a rejected or automatic answer never
 authorizes execution. The built-in tools (`run_python`, `read_file`/`write_file`/`edit_file`/
 `list_files`, `glob`, `grep`, git and worktree tools, MLflow tracker tools, dataset/SQL/statistics/
-profile tools, `run_experiment`, `audit_model`/`compare_models`/`inspect_model`), the
+profile tools, `run_experiment`, `evaluate_model`, `audit_model`/`compare_models`/`inspect_model`), the
 `LocalSubprocessSandbox`/`ContainerSandbox` and the MCP server (`tools/mcp/server.py`) are
 implemented. `thymira.tools.guidance.tool_guidance` (harness basics 1, ADR-0013) adds per-tool
 prompt guidance for the sub-agent's system prompt.
@@ -46,7 +46,7 @@ separately records the backend's reported mode and the requested mode. Reconfigu
 cannot broaden an existing human approval. MIRA independently checks the recorded identity and
 execution mode.
 
-`ContainerSandbox` executes `run_python`, `run_experiment`, `inspect_model` and `audit_model`
+`ContainerSandbox` executes `run_python`, `run_experiment`, `evaluate_model`, `inspect_model` and `audit_model`
 using the locally built `thymira:dev` image (`just docker-build`). It clears the CLI entrypoint,
 disables implicit pulling, uses one helper/worker identity (non-root on native POSIX; uid 0 inside
 the private volume on Docker Desktop) and mounts the workspace at `/workspace`. Python
@@ -114,6 +114,65 @@ the shipped credit-risk CR-001 policy to progress through explicit per-call appr
 
 ## Tools
 
+### Registered Python source
+
+`run_python` accepts exactly one of `code` (the compatible inline form) or
+`source_artifact_id`. For a saved script, first call `write_file` with `kind="code"` and
+use its returned artifact ID. The model-facing write result includes that ID. A workspace
+filename or an artifact basename does not select executable source.
+
+The registered-source path requires an active Python CODE artifact in the current Run. Before
+the Gate, it verifies the bounded stored bytes, manifest size and digest, UTF-8, Python syntax
+and credential redaction policy. The canonical tool intent binds the resolved code and source
+identity. Execution stages those exact bytes; replacing the workspace copy does not change the
+approved program. A corrected registered revision needs its own ID and approval. Published
+outputs carry the source artifact as a lineage input. Inline calls preserve their prior argument
+shape and policy behavior. This does not make invalid Python valid or authorize cross-Run reads.
+
+For registered Python writes (kind CODE and a .py path), write_file also validates syntax and
+source bounds before requesting human review. It preserves exact source bytes, including valid
+string escapes; other file formats and unregistered draft writes retain their existing behavior.
+
+### Python output publication
+
+For outputs selected dynamically by a script, run_python accepts output_manifest_path instead
+of a nonempty output_artifacts list. The script writes a fresh workspace-relative JSON file
+containing 1-64 descriptors, for example:
+
+~~~python
+outputs = []
+for column in frame.select_dtypes(include="number").columns:
+    path = f"histogram_{column}.png"
+    # Render the figure from this column.
+    fig.savefig(path)
+    outputs.append({"path": path, "kind": "plot", "media_type": "image/png"})
+Path("outputs_1.json").write_text(json.dumps(outputs), encoding="utf-8")
+~~~
+
+Then invoke run_python with the registered source_artifact_id and
+output_manifest_path="outputs_1.json". The list is produced by the same loop that saves the
+files, avoiding a second predicted list that can name plots for excluded columns. Fixed output
+sets may still use output_artifacts. Every exact plan deliverable remains required.
+
+The manifest must be absent before execution, both at preflight and at dispatch, and is bounded
+to 65,536 bytes. The runtime validates every descriptor and applies the existing containment,
+link, collision, file-content, media-type and byte-limit checks before atomically registering
+logical outputs together with the manifest (LOG). The manager persists the validated logical
+declarations on the terminal event; the manifest is bookkeeping and is excluded from task output
+obligations and retry progress. A corrected execution needs a fresh manifest filename. A new
+registered source revision or filename can repair the failed dynamic publication when its terminal
+declarations cover the complete earlier path-and-kind set, under the same task and Run.
+
+An interpreter exit code of zero with publication failure is now reported separately from a
+Python execution error. Missing-output diagnostics list both missing and existing declared
+files. Nothing is partially registered; the filesystem may still contain outputs from the
+successful process. The runtime snapshots prior output witnesses and rejects unchanged
+pre-existing bytes unless a descriptor names an active same-Run artifact with matching path,
+kind, digest and stored bytes through `reuse_artifact_id`. New files, content changes, and
+observable same-byte rewrites are accepted on direct workspaces. Quota-backed copied workspaces
+require new or content-changed bytes, because export metadata can change without a Python write.
+Reused outputs retain both prior-artifact and executed-source lineage.
+
 Git status, diff, log and commit can use an injected `ContainerSandbox` for standalone workspace
 repositories with a real contained `.git` directory. Confined calls reject gitfiles, linked
 repositories and symlink/reparse-point Git directories before execution. The image includes Git;
@@ -161,3 +220,19 @@ each tool declares (`runtime/tools/src/thymira/tools/builtins/{files,search}.py`
 - Contracts live in `thymira.schemas`; do not redefine them here.
 - Everything is English; Google-style docstrings; tests next to the feature in `tests/`.
 - Follow `AGENTS.md` (conventions) and the import direction in `runtime/README.md`.
+
+## Existing-model evaluation
+
+`evaluate_model` predicts from a registered model through the sandbox and computes classifier
+metrics without fitting. Default `recorded_holdout` requires a current Core-authored evaluation
+context with exact model/dataset/schema lineage, hashes and supported training split evidence.
+`all_rows` must be explicit and is labelled as such. Binary ROC-AUC records null and an honest
+reason when unavailable; it never fabricates a score or substitutes accuracy.
+
+The METRICS artifact records source identity, model/data hashes, selected rows, positive class,
+averaging and values. The existing Tool Manager, capability Gate and exact-call approval/resume
+apply. Input publication never authorizes model deserialization. `run_experiment` validates
+within-call destination collisions and binary extensions before subprocess/tracker work while
+retaining the store’s support for new revisions at existing logical destinations.
+
+See [Session continuity verification](../../docs/session-model-continuity-verification.md).

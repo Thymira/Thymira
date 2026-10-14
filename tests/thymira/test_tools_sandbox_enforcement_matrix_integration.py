@@ -278,10 +278,14 @@ def test_tool_manager_refuses_unsupported_local_confinement_without_running_a_ch
 
 
 def test_tool_manager_refuses_an_unavailable_container_without_host_fallback(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A missing image is a tool refusal with no child execution or host fallback."""
-    require_sandbox_image()
+    """An unavailable configured container is refused without child execution or host fallback."""
+
+    def fail_if_child_starts(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("unavailable container must be refused before child execution")
+
+    monkeypatch.setattr(ContainerSandbox, "run", fail_if_child_starts)
     context, events_path = _context(tmp_path)
     manager = ToolManager(
         ToolRegistry(
@@ -301,17 +305,31 @@ def test_tool_manager_refuses_an_unavailable_container_without_host_fallback(
     )
 
     assert not execution.result.success
-    assert execution.result.exit_code == 125
-    assert execution.result.sandbox_enforcement is SandboxEnforcement.UNUSABLE
+    assert execution.result.exit_code is None
+    assert execution.result.error is not None
+    assert "container runtime unavailable" in execution.result.error
+    assert execution.result.sandbox_enforcement is None
     assert not (context.workspace / "must-not-run").exists()
     events = _replayed(context, events_path)
+    assert not any(
+        event.type
+        in {
+            EventType.HUMAN_APPROVAL_REQUESTED,
+            EventType.HUMAN_APPROVAL,
+            EventType.TOOL_STARTED,
+        }
+        for event in events
+    )
     completed = next(event for event in events if event.type is EventType.TOOL_COMPLETED)
     assert completed.payload["requested_sandbox_mode"] == SandboxMode.WORKSPACE_WRITE.value
-    assert completed.payload["sandbox_enforcement"] == SandboxEnforcement.UNUSABLE.value
-    assert completed.payload["sandbox_spec"]["backend"] == "container"
-    assert completed.payload["sandbox_termination"]["outcome"] == "unavailable"
+    assert completed.payload["status"] == ToolCallStatus.FAILED.value
+    assert completed.payload["exit_code"] is None
+    assert "container runtime unavailable" in completed.payload["error"]
+    assert completed.payload["sandbox_enforcement"] is None
+    assert completed.payload["sandbox_spec"] is None
+    assert completed.payload["sandbox_termination"] is None
     controls = _controls(context, events)
-    assert controls["A3"].status is ControlStatus.PASSED, controls["A3"].detail
-    assert controls["A19"].status is ControlStatus.FAILED
-    assert controls["A29"].status is ControlStatus.PASSED, controls["A29"].detail
+    assert controls["A3"].status is ControlStatus.NOT_APPLICABLE, controls["A3"].detail
+    assert controls["A19"].status is ControlStatus.NOT_APPLICABLE, controls["A19"].detail
+    assert controls["A29"].status is ControlStatus.NOT_APPLICABLE, controls["A29"].detail
     assert controls["A30"].status is ControlStatus.NOT_APPLICABLE

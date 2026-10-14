@@ -464,9 +464,9 @@ def test_final_serialization_failure_replaces_the_success_value_with_a_replayabl
     capability = ToolCapability(id="serialize", external_effects=())
     context = _context(tmp_path, capability=capability)
     tool = _FakeTool("serialize", capability)
-    from thymira.tools import manager as manager_module
+    from thymira.tools import result_evidence as evidence_module
 
-    original_canonical_result = manager_module.canonical_result
+    original_canonical_result = evidence_module.canonical_result
 
     def fail_success_serialization(value: Any, *, success: bool) -> dict[str, object]:
         """Fail only while serializing the producer's success value."""
@@ -474,7 +474,7 @@ def test_final_serialization_failure_replaces_the_success_value_with_a_replayabl
             raise TypeError("cannot serialize success")
         return original_canonical_result(value, success=success)
 
-    monkeypatch.setattr(manager_module, "canonical_result", fail_success_serialization)
+    monkeypatch.setattr(evidence_module, "canonical_result", fail_success_serialization)
     execution = ToolManager(ToolRegistry((tool,))).execute(context, tool.name, {})
 
     durable = context.event_log.events()[-1].payload["value"]

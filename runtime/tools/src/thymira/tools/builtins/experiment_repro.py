@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
 
 from pydantic import (
@@ -13,11 +14,13 @@ from pydantic import (
     model_validator,
 )
 
+from thymira.events import canonical_json
 from thymira.schemas import ThymiraModel
 from thymira.tools.model_sidecars import MAX_SIDECAR_BYTES, read_bounded_json
 from thymira.tools.models import ToolExecutionError
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
     from pathlib import Path
 
 _REQUIRED_LIBRARY_VERSIONS = frozenset(
@@ -75,6 +78,26 @@ class ExperimentReproducibilityEvidence(ThymiraModel):
         if type(classifier_seed) is not int or classifier_seed != self.seed:
             raise ValueError("estimator arguments must record the actual fixed seed")
         return self
+
+
+def is_default_training_evidence(payload: Mapping[str, Any]) -> bool:
+    """Recognize the bundled default-training evidence contract without loading a model.
+
+    Legacy events lack an explicit kind marker. Their complete validated reproducibility
+    record plus runtime-added script hash identifies the contract; a hash alone does not.
+    This relies on the verified event producer, not proof from arbitrary model bytes.
+    """
+    digest = payload.get("training_script_sha256")
+    if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        return False
+    fields = ExperimentReproducibilityEvidence.model_fields
+    try:
+        ExperimentReproducibilityEvidence.model_validate_json(
+            canonical_json({key: payload[key] for key in fields})
+        )
+    except (KeyError, ValueError):
+        return False
+    return True
 
 
 def load_reproducibility_evidence(path: Path) -> ExperimentReproducibilityEvidence:

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from pydantic import ValidationError
 
-from thymira.events import scrub_credentials, scrub_credentials_value
+from thymira.events import scrub_credentials_value
 from thymira.policies import (
     APPROVAL_SCOPE_DIGEST_KEY,
     DELEGATION_DEPTH_KEY,
@@ -57,7 +57,11 @@ from thymira.tools.refusals import (
     TOOL_CALL_LIMIT_REFUSAL,
     agent_allowlist_refusal,
 )
-from thymira.tools.result_evidence import recordable_result
+from thymira.tools.result_evidence import (
+    recordable_result,
+    recordable_terminal_result,
+    recordable_tool_completed_payload,
+)
 from thymira.tools.results import (
     ToolFailureValue,
     ToolResultValidationError,
@@ -66,6 +70,7 @@ from thymira.tools.results import (
 )
 from thymira.tools.sandbox.workspace_tree import WorkspaceLock, WorkspaceTreeError
 from thymira.tools.spill import spill_result
+from thymira.tools.tool_preflight import validate_tool_request as validate_request
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -80,10 +85,6 @@ if TYPE_CHECKING:
 
 _MAX_TOOL_NAME = 64
 _MAX_DISCOVERY_DIAGNOSTIC = 256
-_MAX_ARGUMENT_VALIDATION_ERRORS = 3
-_MAX_ARGUMENT_VALIDATION_DETAIL = 512
-_MAX_ARGUMENT_VALIDATION_LOCATION = 128
-_MAX_ARGUMENT_VALIDATION_MESSAGE = 256
 
 
 def _credit_of(disposition: TicketDisposition) -> tuple[Answer | None, Approval | None, str | None]:
@@ -402,7 +403,7 @@ class ToolManager:
                 decision_id=constrained.policy_decision_id,
             )
         try:
-            real_arguments = _validate_arguments(tool, real_arguments)
+            real_arguments = validate_request(tool, real_arguments, invocation=context.for_tool())
         except (ToolExecutionError, KeyError, OSError, ValueError) as exc:
             return self._record_failed_call(context, call, recorded_name, _message(exc))
         validated_arguments = real_arguments
@@ -579,6 +580,7 @@ class ToolManager:
         return self._close_record(
             context,
             tool_name,
+            tool,
             running,
             result,
             before_artifact_ids,
@@ -723,6 +725,7 @@ class ToolManager:
         self,
         context: ToolContext,
         tool_name: str,
+        tool: Tool,
         running: ToolCall,
         result: ToolResult,
         before_artifact_ids: set[str],
@@ -824,8 +827,13 @@ class ToolManager:
         # result; no value is silently dropped from evidence.
         status = ToolCallStatus.COMPLETED if result.success else ToolCallStatus.FAILED
         try:
-            recorded = recordable_result(result)
-            value_payload = _canonical_result_value(result) if result.value is not None else None
+            recorded, value_payload = recordable_terminal_result(
+                tool_name,
+                result,
+                tool=tool,
+                arguments=source_arguments or {},
+                invocation=context.for_tool(),
+            )
         except (ToolResultValidationError, TypeError, ValueError) as exc:
             error = _message(exc)
             invalid_sandbox_mode = result.sandbox_mode is not None and not isinstance(
@@ -862,29 +870,15 @@ class ToolManager:
         context.event_log.append(
             EventType.TOOL_COMPLETED,
             _tool_actor(tool_name),
-            {
-                "tool_call_id": completed.id,
-                "task_id": completed.task_id,
-                "tool": tool_name,
-                "status": completed.status,
-                "exit_code": completed.exit_code,
-                "result_code": recorded["result_code"],
-                "timeout_s": recorded["timeout_s"],
-                "aborted": recorded["aborted"],
-                "artifact_ids": list(artifact_ids),
-                "result_sha256": completed.result_sha256,
-                "error": completed.error,
-                "sandbox_mode": recorded["sandbox_mode"],
-                "sandbox_mode_invalid": recorded["sandbox_mode_invalid"],
-                "requested_sandbox_mode": running.sandbox_mode,
-                "sandbox_enforcement": completed.sandbox_enforcement,
-                "sandbox_spec": recorded["sandbox_spec"],
-                "sandbox_cleanup_confirmed": recorded["sandbox_cleanup_confirmed"],
-                "sandbox_termination": recorded["sandbox_termination"],
-                "sandbox_quota_evidence": recorded["sandbox_quota_evidence"],
-                "discovery_witness_artifact_id": discovery_witness_artifact_id,
-                "value": value_payload,
-            },
+            recordable_tool_completed_payload(
+                tool_name,
+                completed,
+                running.sandbox_mode,
+                recorded,
+                discovery_witness_artifact_id,
+                value_payload,
+                result,
+            ),
             subject_id=completed.id,
         )
         return ToolExecution(call=completed, result=result)
@@ -900,7 +894,8 @@ class ToolManager:
 
         Shared by the unknown-tool and argument-validation branches so both leave the same
         evidence: nothing ran, no policy decision was taken, and a single ``tool.completed`` event
-        closes the record.
+        closes the record. The safe call arguments remain on that terminal event because these
+        branches fail before a ``tool.started`` event can bind them to the call.
         """
         result = _failure_result(None, error)
         failed = call.model_copy(
@@ -917,6 +912,7 @@ class ToolManager:
                 "tool_call_id": failed.id,
                 "task_id": failed.task_id,
                 "tool": tool_name,
+                "arguments": failed.arguments,
                 "status": failed.status,
                 "exit_code": None,
                 "result_code": result.code,
@@ -1003,8 +999,9 @@ class ToolManager:
     ) -> ToolExecution:
         """Record a denial that no human can lift: a constraint, an allowlist or a budget ceiling.
 
-        Unlike :meth:`_record_review_denial` the payload carries no call identity -- no arguments
-        and no ``tool_intent_sha256`` -- because there is nothing for a human to answer. The
+        Unlike :meth:`_record_review_denial` the payload carries no ``tool_intent_sha256`` because
+        there is nothing for a human to answer. Safe call arguments remain for runtime settlement
+        and diagnosis. The
         allowlist and run-constraint branches refuse before the Gate is asked at all; the budget
         branch refuses *after* a capability decision allowed the call, and names the Core-owned
         budget decision that refused it (``BudgetRefusal.decision_id``) rather than the one that
@@ -1027,6 +1024,7 @@ class ToolManager:
                 "decision_id": decision_id,
                 "reason": error,
                 "tool": tool_name,
+                "arguments": denied.arguments,
                 "agent_id": context.agent_id,
                 "result_code": result.code,
                 "timeout_s": result.timeout_s,
@@ -1036,47 +1034,6 @@ class ToolManager:
             subject_id=denied.id,
         )
         return ToolExecution(call=denied, result=result)
-
-
-def _validate_arguments(tool: Tool, arguments: dict[str, Any]) -> dict[str, Any]:
-    """Validate arguments and return bounded, non-input diagnostics the model can repair."""
-    if tool.arguments_model is None:
-        return arguments
-    try:
-        validated = tool.arguments_model.model_validate(arguments)
-    except ValidationError as exc:
-        errors = exc.errors(include_url=False, include_context=False, include_input=False)
-        summaries: list[str] = []
-        for error in errors[:_MAX_ARGUMENT_VALIDATION_ERRORS]:
-            location = ".".join(str(item) for item in error.get("loc", ())) or "arguments"
-            location = scrub_credentials(location)
-            message = scrub_credentials(str(error.get("msg", "Invalid value")))
-            location = _bounded_validation_fragment(location, _MAX_ARGUMENT_VALIDATION_LOCATION)
-            message = _bounded_validation_fragment(message, _MAX_ARGUMENT_VALIDATION_MESSAGE)
-            summaries.append(f"{location}: {message}")
-        if len(errors) > _MAX_ARGUMENT_VALIDATION_ERRORS:
-            summaries.append(f"{len(errors) - _MAX_ARGUMENT_VALIDATION_ERRORS} more errors")
-        detail = "; ".join(summaries)[:_MAX_ARGUMENT_VALIDATION_DETAIL]
-        raise ToolExecutionError(f"invalid arguments for tool '{tool.name}': {detail}") from exc
-    except TypeError as exc:
-        # Pydantic v2 deliberately does not wrap a validator-authored TypeError in
-        # ValidationError. Plugin argument models are third-party code, so let that bug close as
-        # the same pre-execution failure as an ordinary schema error instead of escaping the Tool
-        # Manager without a tool.completed record. The exception may contain plugin data or a
-        # credential, therefore only its scrubbed and bounded message reaches the model or log.
-        message = scrub_credentials(_message(exc))
-        message = _bounded_validation_fragment(message, _MAX_ARGUMENT_VALIDATION_MESSAGE)
-        detail = _bounded_validation_fragment(
-            f"arguments: validator raised TypeError: {message}",
-            _MAX_ARGUMENT_VALIDATION_DETAIL,
-        )
-        raise ToolExecutionError(f"invalid arguments for tool '{tool.name}': {detail}") from exc
-    return validated.model_dump(mode="python")
-
-
-def _bounded_validation_fragment(value: str, limit: int) -> str:
-    """Bound one diagnostic fragment while marking that it was shortened."""
-    return value if len(value) <= limit else f"{value[: limit - 1]}…"
 
 
 def _allowlist_error(context: ToolContext, tool_name: str) -> str | None:
@@ -1230,6 +1187,8 @@ def _failure_result(result: ToolResult | None, error: str) -> ToolResult:
         value=failure,
         timeout_s=budget,
         aborted=aborted,
+        publication_progress=None,
+        output_declarations=None,
     )
 
 

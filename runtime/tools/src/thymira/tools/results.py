@@ -17,6 +17,11 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from thymira.schemas import Framework, ThymiraModel
 from thymira.tools.models import ToolResult, ToolResultCode
+from thymira.tools.publication_progress import (
+    PythonPublicationProgress,
+    validated_publication_result_progress,
+    validated_python_output_declarations,
+)
 
 
 class ToolValue(ThymiraModel):
@@ -114,6 +119,7 @@ class ProfileValue(ToolValue):
     rows: int = Field(ge=0)
     columns: int = Field(ge=0)
     artifact_id: str | None = Field(default=None, min_length=1)
+    plot_artifacts: tuple[str, ...] = ()
 
 
 class StatisticsValue(ToolValue):
@@ -228,6 +234,19 @@ class ModelAuditValue(ToolValue):
     artifact_id: str | None = Field(default=None, min_length=1)
 
 
+class ModelEvaluationValue(ToolValue):
+    """Metrics and methodology emitted when evaluating a registered model artifact."""
+
+    model_artifact: str = Field(min_length=1)
+    dataset: str = Field(min_length=1)
+    split: str = Field(min_length=1)
+    metrics: dict[str, float | None]
+    evaluated_rows: int = Field(ge=1)
+    positive_class: str | None = Field(default=None, min_length=1)
+    averaging: str = Field(min_length=1)
+    artifact_id: str = Field(min_length=1)
+
+
 class MlflowMutationValue(ToolValue):
     """Result of a tracker mutation, optionally naming the affected run."""
 
@@ -283,7 +302,7 @@ def result_model_for(tool: Any) -> type[BaseModel] | None:
     return model if isinstance(model, type) and issubclass(model, BaseModel) else None
 
 
-def validate_tool_result(  # noqa: PLR0912  # this boundary validates every producer-controlled field
+def validate_tool_result(  # noqa: PLR0912, PLR0915  # validate every producer-controlled field
     tool: Any, result: Any
 ) -> ToolResult:
     """Validate one producer result and make its typed value the projection source.
@@ -314,6 +333,29 @@ def validate_tool_result(  # noqa: PLR0912  # this boundary validates every prod
         raise ToolResultValidationError(
             f"tool '{getattr(tool, 'name', '<unknown>')}' has no typed result model"
         )
+    try:
+        output_declarations = (
+            validated_python_output_declarations(result.output_declarations)
+            if result.output_declarations is not None
+            else None
+        )
+    except ValueError as exc:
+        raise ToolResultValidationError(str(exc)) from exc
+    if output_declarations is not None:
+        if (
+            type(tool).__module__ != "thymira.tools.builtins.run_python"
+            or type(tool).__name__ != "RunPython"
+            or getattr(tool, "name", None) != "run_python"
+            or result.exit_code != 0
+        ):
+            raise ToolResultValidationError(
+                "Python output declarations are outside their result contract"
+            )
+        result = replace(result, output_declarations=output_declarations)
+    try:
+        publication_progress = validated_publication_result_progress(tool, result, model)
+    except ValueError as exc:
+        raise ToolResultValidationError(str(exc)) from exc
     if not result.success:
         error = result.error or "tool call failed"
         code = result.code or ToolResultCode.FAILURE
@@ -358,7 +400,7 @@ def validate_tool_result(  # noqa: PLR0912  # this boundary validates every prod
         # sandbox recorded for this call, so they survive validation for every declared result
         # model.  The error text stays in ``error`` and in the typed failure value rather than
         # overwriting a child's own output.
-        return replace(result, code=code, value=value)
+        return replace(result, code=code, value=value, publication_progress=publication_progress)
     # The typed value is authoritative for projections.  Keep the envelope's process facts in
     # sync where a process family carries them, so legacy scalar consumers cannot diverge.
     if isinstance(value, ProcessToolValue):
@@ -446,6 +488,7 @@ __all__ = [
     "ModelInspectionValue",
     "ProcessToolValue",
     "ProfileValue",
+    "PythonPublicationProgress",
     "QueryRowsValue",
     "RegulationSearchMatch",
     "RegulationSearchValue",

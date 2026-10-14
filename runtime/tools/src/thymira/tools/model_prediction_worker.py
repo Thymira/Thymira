@@ -36,14 +36,16 @@ def create_model_predictions(request: PredictionRequest, *, workspace: Path) -> 
     values = frame.select(features).to_numpy().tolist()
     targets = [str(value) for value in frame.get_column(request.target_column).to_list()]
     class_labels = _class_labels(model, targets)
+    positive_class = _selected_positive_class(class_labels, request.positive_class)
     predictions = _decode_predictions(model.predict(values), class_labels)
-    probabilities = _positive_probabilities(model, values, len(class_labels))
+    probabilities = _positive_probabilities(model, values, class_labels, positive_class)
     return ModelPredictions(
         format_version=1,
         feature_names=tuple(features),
         class_labels=tuple(class_labels),
         predictions=tuple(predictions),
         positive_probabilities=probabilities,
+        positive_class=positive_class,
     )
 
 
@@ -144,19 +146,39 @@ def _decode_predictions(values: Any, labels: list[str]) -> list[str]:
 
 
 def _positive_probabilities(
-    model: Any, values: list[list[Any]], class_count: int
+    model: Any,
+    values: list[list[Any]],
+    class_labels: list[str],
+    positive_class: str | None,
 ) -> tuple[float, ...] | None:
-    if not hasattr(model, "predict_proba") or class_count != 2:  # noqa: PLR2004
+    if not hasattr(model, "predict_proba") or len(class_labels) != 2:  # noqa: PLR2004
         return None
     probabilities = model.predict_proba(values)
     if len(probabilities) != len(values):
         raise ValueError("model probability row count does not match its predictions")
     try:
-        if any(len(row) != 2 for row in probabilities):  # noqa: PLR2004
+        if any(len(row) != len(class_labels) for row in probabilities):
             raise ValueError("model probabilities must have exactly two columns")
-        return tuple(float(row[1]) for row in probabilities)
+        model_classes = getattr(model, "classes_", class_labels)
+        classes = [normal_label(str(value)) for value in model_classes]
+        positive_index = classes.index(normal_label(positive_class or class_labels[1]))
+        return tuple(float(row[positive_index]) for row in probabilities)
     except (IndexError, TypeError) as exc:
         raise ValueError("model probabilities must have exactly two columns") from exc
+
+
+def _selected_positive_class(classes: list[str], requested: str | None) -> str | None:
+    """Choose and validate the one positive class used for binary score metrics."""
+    if len(classes) != 2:  # noqa: PLR2004  # positive-class scoring is binary only
+        if requested is not None:
+            raise ValueError("positive_class is supported only for binary classification")
+        return None
+    selected = requested or classes[1]
+    normalized = normal_label(selected)
+    for label in classes:
+        if normal_label(label) == normalized:
+            return label
+    raise ValueError(f"positive_class is not a model class: {selected}")
 
 
 if __name__ == "__main__":

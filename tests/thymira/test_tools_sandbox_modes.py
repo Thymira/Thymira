@@ -33,6 +33,7 @@ _SUBPROCESS_TOOLS = frozenset(
         "run_notebook",
         "run_python",
         "run_experiment",
+        "evaluate_model",
         "inspect_model",
         "audit_model",
         "git_status",

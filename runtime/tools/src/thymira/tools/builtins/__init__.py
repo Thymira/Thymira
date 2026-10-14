@@ -4,6 +4,7 @@ from thymira.tools.builtins.audit_model import AuditModel
 from thymira.tools.builtins.compare_models import CompareModels
 from thymira.tools.builtins.configured import configured_builtins_registry
 from thymira.tools.builtins.data_analysis import AnalyzeDataset, ProfileDataset
+from thymira.tools.builtins.evaluate_model import EvaluateModel
 from thymira.tools.builtins.export_pdf import ExportPdf
 from thymira.tools.builtins.file_contracts import FileToolContract
 from thymira.tools.builtins.files import EditFile, ListFiles, ReadFile, WriteFile
@@ -24,6 +25,7 @@ __all__ = [
     "AuditModel",
     "CompareModels",
     "EditFile",
+    "EvaluateModel",
     "ExportPdf",
     "FileToolContract",
     "FreshnessPolicy",

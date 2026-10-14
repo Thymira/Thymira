@@ -99,6 +99,10 @@ from thymira.tools.builtins.data_analysis import _finite as analysis_finite
 from thymira.tools.builtins.data_analysis import _histogram
 from thymira.tools.builtins.files import WriteFileArguments
 from thymira.tools.builtins.mlflow_tools import mlflow_tools
+from thymira.tools.builtins.python_source import (
+    MAX_PYTHON_SOURCE_BYTES,
+    MAX_PYTHON_SOURCE_LINES,
+)
 from thymira.tools.builtins.query_sql import _read_only_query
 from thymira.tools.builtins.run_experiment import RunExperimentArguments
 from thymira.tools.builtins.run_python import RunPythonArguments, builtins_registry
@@ -108,7 +112,7 @@ from thymira.tools.mcp.server import _mcp_input_schema
 from thymira.tools.mlflow import MlflowTracker
 from thymira.tools.model_prediction_worker import _decode_predictions
 from thymira.tools.sandbox import container as container_module
-from thymira.tools.sandbox.base import ResolvedExecutionSpec, SandboxRun
+from thymira.tools.sandbox.base import ResolvedExecutionSpec, SandboxRun, StagedInput
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -186,9 +190,11 @@ class _FixedSandbox:
 class _CapturingSandbox:
     result: SandboxRun
     argv: list[list[str]] = field(default_factory=list)
+    staged_inputs: list[tuple[StagedInput, ...]] = field(default_factory=list)
 
-    def run(self, argv: list[str], **_kwargs: Any) -> SandboxRun:
+    def run(self, argv: list[str], **kwargs: Any) -> SandboxRun:
         self.argv.append(argv)
+        self.staged_inputs.append(tuple(kwargs.get("staged_inputs", ())))
         return self.result
 
 
@@ -2010,6 +2016,107 @@ def test_run_python_tool_executes_and_records_partial_confinement(tmp_path: Path
     assert context.event_log.verify().valid
 
 
+def test_run_python_rejects_invalid_syntax_before_requesting_approval_or_launching(
+    tmp_path: Path,
+) -> None:
+    """Malformed model source fails before the review gate or sandbox is reached."""
+    sandbox = _CapturingSandbox(
+        SandboxRun(
+            stdout="",
+            stderr="",
+            exit_code=0,
+            mode=SandboxMode.WORKSPACE_WRITE,
+            enforcement=SandboxEnforcement.PARTIAL,
+        )
+    )
+    tool = RunPython(sandbox=sandbox)
+    context = _context(tmp_path, capability=tool.capability, approver=None, risk_confidence=0.1)
+    manager = ToolManager(ToolRegistry((cast("Tool", tool),)))
+    malformed_source = r"import math\nprint('this was a literal separator')"
+
+    execution = manager.execute(
+        context,
+        "run_python",
+        {"code": malformed_source, "description": "Print a value on a second line"},
+    )
+
+    assert execution.call.status is ToolCallStatus.FAILED
+    assert execution.pending_approval is None
+    assert "invalid Python syntax" in (execution.call.error or "")
+    assert "line 1, column" in (execution.call.error or "")
+    assert "literal backslash+n found" in (execution.call.error or "")
+    assert "Use an actual newline" in (execution.call.error or "")
+    assert "unchanged input fails" in (execution.call.error or "")
+    assert sandbox.argv == []
+    assert not any(
+        event.type in {EventType.POLICY_DECISION, EventType.HUMAN_APPROVAL_REQUESTED}
+        for event in context.event_log.events()
+    )
+
+
+def test_run_python_preserves_escapes_inside_valid_string_literals(tmp_path: Path) -> None:
+    """Syntax validation leaves the model's original string escape bytes unchanged."""
+    capability = ToolCapability(id="run_python", external_effects=())
+    context = _context(tmp_path, capability=capability, development=True)
+    sandbox = _CapturingSandbox(
+        SandboxRun(
+            stdout="\\n\n",
+            stderr="",
+            exit_code=0,
+            mode=SandboxMode.DANGER_FULL_ACCESS,
+            enforcement=SandboxEnforcement.PARTIAL,
+        )
+    )
+    tool = RunPython(sandbox=sandbox, mode=SandboxMode.DANGER_FULL_ACCESS)
+    manager = ToolManager(ToolRegistry((cast("Tool", tool),)))
+    source = r'print("\n")'
+
+    execution = manager.execute(
+        context,
+        "run_python",
+        {"code": source, "description": "Print the escaped newline value"},
+    )
+
+    assert execution.call.status is ToolCallStatus.COMPLETED
+    assert sandbox.staged_inputs[0][0].content == source.encode("utf-8")
+
+
+@pytest.mark.parametrize(
+    ("source", "limit_message"),
+    [
+        ("#" + "é" * (MAX_PYTHON_SOURCE_BYTES // 2), "UTF-8 bytes"),
+        ("pass\n" * MAX_PYTHON_SOURCE_LINES, "lines"),
+    ],
+    ids=["utf8-byte-limit", "line-limit"],
+)
+def test_run_python_bounds_source_before_requesting_approval_or_launching(
+    tmp_path: Path, source: str, limit_message: str
+) -> None:
+    """Oversized source fails within the preflight bounds before review or execution."""
+    sandbox = _CapturingSandbox(
+        SandboxRun(
+            stdout="",
+            stderr="",
+            exit_code=0,
+            mode=SandboxMode.WORKSPACE_WRITE,
+            enforcement=SandboxEnforcement.PARTIAL,
+        )
+    )
+    tool = RunPython(sandbox=sandbox)
+    context = _context(tmp_path, capability=tool.capability, approver=None, risk_confidence=0.1)
+
+    execution = ToolManager(ToolRegistry((cast("Tool", tool),))).execute(
+        context,
+        "run_python",
+        {"code": source, "description": "Check source limits"},
+    )
+
+    assert execution.call.status is ToolCallStatus.FAILED
+    assert limit_message in (execution.call.error or "")
+    assert execution.call.policy_decision_id is None
+    assert sandbox.argv == []
+
+
 def test_run_python_publishes_declared_binary_outputs(tmp_path: Path) -> None:
     capability = ToolCapability(id="run_python", external_effects=())
     context = _context(tmp_path, capability=capability, development=True)
@@ -2268,7 +2375,10 @@ def test_run_python_fails_when_declared_output_is_missing(tmp_path: Path) -> Non
     )
 
     assert execution.call.status is ToolCallStatus.FAILED
-    assert execution.result.error == "declared output artifact does not exist: reports/missing.md"
+    assert "Python execution succeeded" in (execution.result.error or "")
+    assert "declared output artifact does not exist: reports/missing.md" in (
+        execution.result.error or ""
+    )
     assert not context.artifact_store.exists("reports/missing.md")
 
 

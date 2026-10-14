@@ -12,6 +12,7 @@ from thymira.state import LocalArtifactStore
 from thymira.tools.builtins.data_analysis import ProfileDataset
 from thymira.tools.datasets import register_dataset, schema_artifact_name
 from thymira.tools.models import ToolInvocation
+from thymira.tools.results import ProfileValue
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -92,6 +93,71 @@ def test_profile_dataset_declares_effective_selected_row_and_column_scope(tmp_pa
     assert payload["source"]["columns"] == ["second", "first"]
     assert payload["shape"] == {"rows": 2, "columns": 2}
     assert set(payload["columns"]) == {"second", "first"}
+
+
+def test_profile_dataset_serializes_non_finite_correlations_as_null(tmp_path: Path) -> None:
+    invocation = _invocation(tmp_path)
+    source = tmp_path / "constant.csv"
+    source.write_text(
+        "constant,varying,label\n1,1,a\n1,2,b\n1,3,a\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    register_dataset(
+        invocation.artifact_store,
+        source,
+        "constant",
+        produced_by=invocation.agent_id,
+    )
+
+    result = ProfileDataset().execute(
+        invocation,
+        {"dataset": "constant", "description": "Profile a constant numeric column"},
+    )
+    payload = json.loads(result.stdout)
+
+    assert payload["correlation"]["constant"][0] is None
+    json.dumps(payload, allow_nan=False)
+
+
+@pytest.mark.parametrize("columns", [None, ["label"], []])
+def test_profile_dataset_publishes_real_pngs_linked_to_its_verified_profile(
+    tmp_path: Path, columns: list[str] | None
+) -> None:
+    from io import BytesIO
+
+    from PIL import Image
+
+    invocation = _invocation(tmp_path)
+    _register_dataset(invocation, tmp_path)
+    result = ProfileDataset().execute(
+        invocation,
+        {
+            "dataset": "sample",
+            "columns": columns,
+            "max_rows": 2,
+            "include_plots": True,
+            "description": "Publish a bounded EDA with charts",
+        },
+    )
+
+    artifacts = invocation.artifact_store.list_active()
+    report = invocation.artifact_store.get("profile/sample.json")
+    assert report is not None
+    plots = [artifact for artifact in artifacts if artifact.kind is ArtifactKind.PLOT]
+    assert len(plots) == (2 if columns is None else 1)
+    assert set(result.artifact_ids) == {report.id, *(plot.id for plot in plots)}
+    assert isinstance(result.value, ProfileValue)
+    assert set(result.value.plot_artifacts) == {plot.name for plot in plots}
+    assert set(json.loads(result.stdout)["plot_artifacts"]) == {plot.name for plot in plots}
+    assert "plot_artifacts" not in invocation.artifact_store.load_json(report.name)
+    assert invocation.artifact_store.verify() == []
+    for plot in plots:
+        assert plot.media_type == "image/png"
+        assert report.id in plot.input_artifact_ids
+        with Image.open(BytesIO(invocation.artifact_store.load_bytes(plot.name))) as image:
+            assert image.format == "PNG"
+            image.verify()
 
 
 def test_profile_dataset_refuses_an_unregistered_dataset_source(tmp_path: Path) -> None:

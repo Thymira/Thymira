@@ -10,6 +10,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from thymira.tools.builtins.python_source import (
+    MAX_PYTHON_SOURCE_BYTES,
+    MAX_PYTHON_SOURCE_LINES,
+)
+from thymira.tools.profile_paths import profile_output_guidance
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
@@ -48,17 +54,39 @@ GUIDANCE: dict[str, str] = {
     ),
     "run_python": (
         "Check the [exit code: N] marker on every run_python result; investigate a failure "
-        "before moving on. Each call runs in a fresh interpreter: write files for anything the "
-        "next call needs, and keep printed output short — long output is truncated."
+        "before moving on. "
+        "For a saved script, pass source_artifact_id from write_file(kind=code). The runtime "
+        "executes that registered revision; a filename is not an artifact ID. Do not send code "
+        "again alongside the reference. Corrected scripts need a newly registered ID. "
+        "Syntax is checked before approval and errors identify the line and column. Use actual "
+        "line breaks between statements; a literal `\\n` outside a string is not a line break. "
+        f"Escapes inside quoted strings are preserved. Keep source within "
+        f"{MAX_PYTHON_SOURCE_BYTES} UTF-8 bytes and {MAX_PYTHON_SOURCE_LINES} lines. "
+        "Each call runs in a fresh interpreter: write files for anything the "
+        "next call needs, and keep printed output short — long output is truncated. "
+        "For data-dependent files, append descriptors after each save in the script and write "
+        "the list as JSON at a fresh output_manifest_path. Pass that path instead of guessing "
+        "output_artifacts. Publication is atomic; a missing declared file with exit code 0 "
+        "is a publication mismatch, not a Python execution error. Read the reported paths "
+        "and fix the declarations, not unrelated working code. Never read PNGs as text."
     ),
     "profile_dataset": (
         "Use the profile_dataset tool to understand a registered dataset before modelling; do "
         "not read the raw file with read_file. Registered datasets are listed in the runtime "
-        "context."
+        f"context. {profile_output_guidance()}"
     ),
     "run_experiment": (
         "Use the run_experiment tool to train a baseline on a registered dataset; report only "
         "the metrics it returns, never a number you have not seen in its output."
+    ),
+    "evaluate_model": (
+        "Use evaluate_model to compute accuracy, precision, recall, F1 and ROC-AUC for a model "
+        "already registered in the current artifact store; it never fits the model. The default "
+        "recorded_holdout requires Core's evaluation context and matching model, dataset and "
+        "schema hashes. If that evidence is unavailable, ask for an explicit evaluation dataset "
+        "and set split='all_rows'; the result states that all rows were used and does not claim "
+        "an independent holdout. Use the reported positive class and averaging method when "
+        "describing the metrics, and quote the recorded reason when ROC-AUC is unavailable."
     ),
     "export_pdf": (
         "Use the export_pdf tool to compile a Markdown file already in the workspace, and any "

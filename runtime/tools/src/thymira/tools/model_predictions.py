@@ -6,7 +6,7 @@ import stat
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from thymira.tools.model_sidecars import read_bounded_file
 from thymira.tools.models import ToolExecutionError
@@ -26,6 +26,7 @@ class PredictionRequest(BaseModel):
     model_path: str = Field(min_length=1)
     dataset_path: str = Field(min_length=1)
     target_column: str = Field(min_length=1)
+    positive_class: str | None = Field(default=None, min_length=1)
 
 
 class ModelPredictions(BaseModel):
@@ -38,6 +39,7 @@ class ModelPredictions(BaseModel):
     class_labels: tuple[str, ...]
     predictions: tuple[str, ...]
     positive_probabilities: tuple[Annotated[float, Field(ge=0.0, le=1.0)], ...] | None = None
+    positive_class: str | None = Field(default=None, min_length=1)
 
     @field_validator("format_version", mode="before")
     @classmethod
@@ -47,6 +49,21 @@ class ModelPredictions(BaseModel):
                 "format version must be an integer"
             )
         return value
+
+    @model_validator(mode="after")
+    def _validate_positive_class(self) -> ModelPredictions:
+        """Bind binary scores to their positive label instead of implying class order."""
+        if (
+            self.positive_class is None
+            and self.positive_probabilities is not None
+            and len(self.class_labels) == 2  # noqa: PLR2004  # binary probability envelope
+        ):
+            return self.model_copy(update={"positive_class": self.class_labels[1]})
+        if self.positive_class is not None:
+            labels = {normal_label(label) for label in self.class_labels}
+            if normal_label(self.positive_class) not in labels:
+                raise ValueError("positive class must be one of the declared class labels")
+        return self
 
 
 def normal_label(value: str) -> str:
@@ -145,8 +162,17 @@ def _validate_predictions(
     )
     by_normal = {normal_label(label): label for label in aligned_classes}
     aligned_predictions = tuple(by_normal[normal_label(value)] for value in result.predictions)
+    positive_class = (
+        by_normal.get(normal_label(result.positive_class), result.positive_class)
+        if result.positive_class is not None
+        else None
+    )
     return result.model_copy(
-        update={"class_labels": aligned_classes, "predictions": aligned_predictions}
+        update={
+            "class_labels": aligned_classes,
+            "predictions": aligned_predictions,
+            "positive_class": positive_class,
+        }
     )
 
 

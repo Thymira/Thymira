@@ -5,10 +5,15 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field, replace
 from hashlib import sha256
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel, StrictFloat, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    RootModel,
+    StrictFloat,
+)
 
 from thymira.policies import ToolCapability
 from thymira.schemas import (
@@ -20,7 +25,10 @@ from thymira.schemas import (
     new_id,
 )
 from thymira.state import ArtifactWrite
-from thymira.tools.builtins.argument_contracts import DESCRIPTION_FIELD, Description
+from thymira.tools.builtins.experiment_destinations import (
+    RunExperimentArguments,
+    preflight_artifact_destinations,
+)
 from thymira.tools.builtins.experiment_repro import DEFAULT_TEST_SIZE, load_reproducibility_evidence
 from thymira.tools.builtins.subprocess_command import (
     assert_no_link_components,
@@ -47,40 +55,6 @@ from thymira.tools.model_sidecars import (
 from thymira.tools.models import ToolEvent, ToolExecutionError, ToolInvocation, ToolResult
 from thymira.tools.results import ExperimentValue
 from thymira.tools.sandbox import LocalSubprocessSandbox, Sandbox, StagedInput
-
-
-class RunExperimentArguments(BaseModel):
-    """Arguments for the deterministic baseline experiment."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    dataset: str = Field(min_length=1)
-    target_column: str = Field(min_length=1)
-    description: Description = DESCRIPTION_FIELD
-    experiment_name: str = Field(default="thymira-experiment", min_length=1)
-    model_artifact_name: str | None = Field(default=None, min_length=1)
-    metrics_artifact_name: str | None = Field(default=None, min_length=1)
-    seed: int = Field(default=7, ge=0)
-    timeout_s: float = Field(default=120.0, gt=0, le=600)
-    code: str | None = Field(default=None, max_length=100_000)
-
-    @field_validator("model_artifact_name", "metrics_artifact_name")
-    @classmethod
-    def _relative_artifact_name(cls, value: str | None) -> str | None:
-        """Keep optional custom artifact destinations inside the artifact store namespace."""
-        if value is None:
-            return None
-        normalized = value.replace("\\", "/")
-        if (
-            PurePosixPath(normalized).is_absolute()
-            or PureWindowsPath(normalized).is_absolute()
-            or PureWindowsPath(normalized).drive
-            or ".." in PurePosixPath(normalized).parts
-            or normalized == ".thymira"
-            or normalized.startswith(".thymira/")
-        ):
-            raise ValueError("artifact name must be workspace-relative")
-        return normalized
 
 
 class _ExperimentMetrics(RootModel[dict[str, StrictFloat]]):
@@ -123,10 +97,17 @@ class RunExperiment:
         """Return the capability that records this instance's requested sandbox mode."""
         return capability_for_sandbox_mode(self._capability, self.mode)
 
-    def execute(  # noqa: PLR0915  # ordered experiment lifecycle remains explicit
+    def execute(  # noqa: PLR0911, PLR0915  # ordered experiment lifecycle remains explicit
         self, invocation: ToolInvocation, arguments: dict[str, Any]
     ) -> ToolResult:
         """Train, track and persist the model and metrics artifacts."""
+        mode = requested_sandbox_mode(self.capability)
+        if refusal := read_only_staging_refusal(mode):
+            return refusal
+        destinations = preflight_artifact_destinations(arguments, mode)
+        if isinstance(destinations, ToolResult):
+            return destinations
+        model_artifact_name, metrics_artifact_name = destinations
         prepared = _training_preflight(self.capability, Path(invocation.workspace))
         if isinstance(prepared, ToolResult):
             return prepared
@@ -237,12 +218,6 @@ class RunExperiment:
             reproducibility["training_script_sha256"] = training_script_sha256
         validated_model_path, validated_metrics_path = _write_validated_training_outputs(
             work_dir, model_bytes, metrics
-        )
-        model_artifact_name = (
-            arguments.get("model_artifact_name") or f"models/{arguments['experiment_name']}.joblib"
-        )
-        metrics_artifact_name = (
-            arguments.get("metrics_artifact_name") or f"metrics/{arguments['experiment_name']}.json"
         )
         metrics_bytes = json.dumps(metrics, sort_keys=True).encode("utf-8")
         tracker = MlflowTracker(workspace)
