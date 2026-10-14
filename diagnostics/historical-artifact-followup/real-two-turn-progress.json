@@ -1,0 +1,191 @@
+{
+  "isolated_root": "C:/Users/carlo/AppData/Local/Temp/thymira-historical-followup-13xfoic0",
+  "first_run": {
+    "run_id": "run_c0dd948eb5b74380993cc014cf8c51b6",
+    "status": "COMPLETED",
+    "terminal_evidence_valid": true,
+    "verdict": "completed with approved human review",
+    "event_count": 693,
+    "event_chain_valid": true,
+    "artifact_errors": [],
+    "strict_json_profiles": [
+      "profile/german_credit.json"
+    ],
+    "profile_artifacts": [
+      {
+        "name": "profile/german_credit.json",
+        "sha256": "642c5904d757ff973ce360f114831c161f53e99121921bf0d8e49494e604f25d",
+        "valid": true
+      },
+      {
+        "name": "profile/german_credit-distributions.png",
+        "sha256": "f7c42c7aa6c861d69f07ed607c0d53ac8f88736559578c245501beb732763014",
+        "valid": true
+      },
+      {
+        "name": "profile/german_credit-correlation.png",
+        "sha256": "1db453932aa3b72c9e1f915751a34ff533d4f2de5140c02388983e0c8d90c94a",
+        "valid": true
+      }
+    ],
+    "task_completions": [
+      {
+        "agent": "data",
+        "completion_evidence": {
+          "ignored_tool_call_ids": [],
+          "missing_required_artifacts": [],
+          "plan_task_id": "1",
+          "repaired_tool_call_ids": [],
+          "unresolved_tool_call_ids": [],
+          "validation_failures": [],
+          "verified_artifact_ids": []
+        },
+        "cost_usd": 0.0014022000000000001,
+        "delegation_depth": 1,
+        "delegation_key": "26406953cf19b6babf4c0310f676e78bd191842e7cdbdc4ac41a1e868d2f443a",
+        "end_reason": "completed",
+        "input_tokens": 9068,
+        "output_tokens": 374,
+        "parent_agent": "thy",
+        "status": "COMPLETED",
+        "step_key": "d625d33c0e5287447730e5747fa0776c75973f5b76ea4f71d93ef4ee52cdf767",
+        "stop_reason": "completed",
+        "task_id": "task_15aeb23bee5a4b9dbb1b1db4bacbfddd"
+      }
+    ]
+  },
+  "second_run": {
+    "run_id": "run_7781e29e9fd3456dbe1d8ddd63ead41e",
+    "conversation": {
+      "clarification_context": [],
+      "client_message_id": "isolated-turn-2",
+      "context_run_ids": [
+        "run_c0dd948eb5b74380993cc014cf8c51b6"
+      ],
+      "message": "¿puedes hacer algo más con el dataset?",
+      "model_inputs": [],
+      "ordinal": 2,
+      "work_kind": "general"
+    },
+    "event_count": 52,
+    "artifact_events_before_start": 0,
+    "tool_starts_before_approval": 0,
+    "pending_review": {
+      "run_id": "run_7781e29e9fd3456dbe1d8ddd63ead41e",
+      "decision_id": "decision_daee9c90d2bc4af092039f7ca75b10ea",
+      "scope": [
+        {
+          "seq": 32,
+          "type": "policy.decision",
+          "payload": {
+            "decision": "PASS",
+            "execution_constraints": {
+              "allowed_tools": [],
+              "local_execution_only": false,
+              "max_tool_calls": null,
+              "prohibited_actions": [],
+              "prohibited_tools": [],
+              "required_evidence": [],
+              "requires_human_review": false
+            },
+            "finding_ids": [],
+            "id": "decision_fc8dcc5e57b54948a541141b1611ab01",
+            "policy_name": "base+credit-risk@1.0+1.0",
+            "policy_sha256": "4a6edfd56dff865f79ba5a7182093068d143282e2970117e18937861cab50dca",
+            "reason": "No model policy constrains role 'mira'; the model choice authorizes nothing.",
+            "rule_id": "model_default",
+            "run_id": "run_7781e29e9fd3456dbe1d8ddd63ead41e",
+            "subject_id": "run_7781e29e9fd3456dbe1d8ddd63ead41e",
+            "subject_kind": "task"
+          }
+        },
+        {
+          "seq": 40,
+          "type": "policy.decision",
+          "payload": {
+            "decision": "PASS",
+            "execution_constraints": {
+              "allowed_tools": [],
+              "local_execution_only": false,
+              "max_tool_calls": null,
+              "prohibited_actions": [],
+              "prohibited_tools": [],
+              "required_evidence": [],
+              "requires_human_review": false
+            },
+            "finding_ids": [],
+            "id": "decision_63dd97665a884d66b8f1af0230b78ebf",
+            "policy_name": "base+credit-risk@1.0+1.0",
+            "policy_sha256": "4a6edfd56dff865f79ba5a7182093068d143282e2970117e18937861cab50dca",
+            "reason": "Usage is within every budget ceiling.",
+            "rule_id": "budget_within_limits",
+            "run_id": "run_7781e29e9fd3456dbe1d8ddd63ead41e",
+            "subject_id": "run_7781e29e9fd3456dbe1d8ddd63ead41e",
+            "subject_kind": "run"
+          }
+        },
+        {
+          "seq": 42,
+          "type": "policy.decision",
+          "payload": {
+            "decision": "PASS",
+            "execution_constraints": {
+              "allowed_tools": [],
+              "local_execution_only": false,
+              "max_tool_calls": null,
+              "prohibited_actions": [],
+              "prohibited_tools": [],
+              "required_evidence": [],
+              "requires_human_review": false
+            },
+            "finding_ids": [],
+            "id": "decision_f835e74b79434355a90d9d042c65905f",
+            "policy_name": "base+credit-risk@1.0+1.0",
+            "policy_sha256": "4a6edfd56dff865f79ba5a7182093068d143282e2970117e18937861cab50dca",
+            "reason": "No model policy constrains role 'agent'; the model choice authorizes nothing.",
+            "rule_id": "model_default",
+            "run_id": "run_7781e29e9fd3456dbe1d8ddd63ead41e",
+            "subject_id": "run_7781e29e9fd3456dbe1d8ddd63ead41e",
+            "subject_kind": "task"
+          }
+        },
+        {
+          "seq": 49,
+          "type": "policy.decision",
+          "payload": {
+            "decision": "REQUIRE_HUMAN_REVIEW",
+            "execution_constraints": {
+              "allowed_tools": [],
+              "local_execution_only": true,
+              "max_tool_calls": null,
+              "prohibited_actions": [],
+              "prohibited_tools": [],
+              "required_evidence": [],
+              "requires_human_review": false
+            },
+            "finding_ids": [],
+            "id": "decision_daee9c90d2bc4af092039f7ca75b10ea",
+            "policy_name": "base+credit-risk@1.0+1.0",
+            "policy_sha256": "4a6edfd56dff865f79ba5a7182093068d143282e2970117e18937861cab50dca",
+            "reason": "Execution may start with the Gate-authorised execution constraints. Fail-safe escalation: classification flagged for human review.",
+            "rule_id": "GOV-007",
+            "run_id": "run_7781e29e9fd3456dbe1d8ddd63ead41e",
+            "subject_id": "run_7781e29e9fd3456dbe1d8ddd63ead41e",
+            "subject_kind": "run"
+          }
+        },
+        {
+          "seq": 50,
+          "type": "human.approval_requested",
+          "payload": {
+            "decision_id": "decision_daee9c90d2bc4af092039f7ca75b10ea",
+            "reason": "Execution may start with the Gate-authorised execution constraints. Fail-safe escalation: classification flagged for human review.",
+            "rule_id": "GOV-007",
+            "summary": "execution.start: risk high (model_development); factors: affects natural persons, has sensitive attributes, automated calculations and outputs, potential consequences include misleading analysis and privacy harm, sensitive_attributes, affects_natural_persons; missing: none; confidence 0.90; needs_human_review=True"
+          }
+        }
+      ]
+    }
+  },
+  "two_turn_complete": false
+}

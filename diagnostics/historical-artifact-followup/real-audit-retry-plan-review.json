@@ -1,0 +1,132 @@
+{
+  "isolated_root": "C:/Users/carlo/AppData/Local/Temp/thymira-historical-followup-13xfoic0",
+  "run_id": "run_c0dd948eb5b74380993cc014cf8c51b6",
+  "execution_start_approval": {
+    "seq": 188,
+    "decision_id": "decision_6db8f4aaa85242ffb4d6df0c59f54eca",
+    "automatic": false
+  },
+  "pending_plan": {
+    "seq": 199,
+    "action_type": "plan.proposed",
+    "decision_id": "decision_942d6b698a8347688a996b41a7475100",
+    "plan": {
+      "source_model_id": null,
+      "tasks": [
+        {
+          "agent": "data",
+          "depends_on": [],
+          "id": "1",
+          "instruction": "Call profile_dataset(include_plots=true) on the german_credit dataset.",
+          "model_input_ids": [],
+          "phase": "execute",
+          "recovery_of_position": null,
+          "required_artifacts": [],
+          "skill_names": []
+        }
+      ],
+      "work_kind": "general"
+    },
+    "plan_review": {
+      "candidate_sha256": "c77330271a018c7ea0b96e9690c4e16484424c3bf540a2c3ceb352986450adef",
+      "scope": {
+        "conversation": {
+          "clarification_context": [],
+          "client_message_id": "isolated-turn-1",
+          "context_run_ids": [],
+          "message": "Realiza un EDA descriptivo del dataset german_credit: calidad, valores ausentes, distribuciones y correlaciones numéricas. Usa profile_dataset(include_plots=true). Es investigación retrospectiva: no entrenes modelos ni tomes decisiones sobre solicitantes reales.",
+          "model_inputs": [],
+          "ordinal": 1,
+          "work_kind": "general"
+        },
+        "execution_constraints": {
+          "allowed_tools": [],
+          "local_execution_only": true,
+          "max_tool_calls": null,
+          "prohibited_actions": [],
+          "prohibited_tools": [],
+          "required_evidence": [],
+          "requires_human_review": false
+        },
+        "execution_decision": {
+          "decision": "REQUIRE_HUMAN_REVIEW",
+          "execution_constraints": {
+            "allowed_tools": [],
+            "local_execution_only": true,
+            "max_tool_calls": null,
+            "prohibited_actions": [],
+            "prohibited_tools": [],
+            "required_evidence": [],
+            "requires_human_review": false
+          },
+          "finding_ids": [],
+          "id": "decision_6db8f4aaa85242ffb4d6df0c59f54eca",
+          "policy_name": "base+credit-risk@1.0+1.0",
+          "policy_sha256": "4a6edfd56dff865f79ba5a7182093068d143282e2970117e18937861cab50dca",
+          "reason": "Execution may start with the Gate-authorised execution constraints. Fail-safe escalation: classification flagged for human review.",
+          "rule_id": "GOV-007",
+          "run_id": "run_c0dd948eb5b74380993cc014cf8c51b6",
+          "subject_id": "run_c0dd948eb5b74380993cc014cf8c51b6",
+          "subject_kind": "run"
+        },
+        "policy_sha256": "4a6edfd56dff865f79ba5a7182093068d143282e2970117e18937861cab50dca",
+        "project_id": "project_90ad11050573fc69a61618d52c5f6185",
+        "prompt": "Realiza un EDA descriptivo del dataset german_credit: calidad, valores ausentes, distribuciones y correlaciones numéricas. Usa profile_dataset(include_plots=true). Es investigación retrospectiva: no entrenes modelos ni tomes decisiones sobre solicitantes reales.",
+        "run_id": "run_c0dd948eb5b74380993cc014cf8c51b6",
+        "session_id": "session_c0b1176dc82f42d59749e8c60e59869c"
+      },
+      "scope_sha256": "128795720213f0383431a179c3f85f490bda096abab8d5b43376071c865d5b00",
+      "version": 1
+    },
+    "reason": "Action not covered by the policy: when in doubt, ask a human.",
+    "rule_id": "default",
+    "summary": "Review the proposed plan: 1: Call profile_dataset(include_plots=true) on the german_credit dataset. (outputs: no named files)"
+  },
+  "latest_transition": {
+    "seq": 202,
+    "payload": {
+      "command": "wait_for_approval",
+      "condition": "waiting",
+      "from_version": 13,
+      "outcome": null,
+      "policy_decision": {
+        "decision": "REQUIRE_HUMAN_REVIEW",
+        "execution_constraints": {
+          "allowed_tools": [],
+          "local_execution_only": false,
+          "max_tool_calls": null,
+          "prohibited_actions": [],
+          "prohibited_tools": [],
+          "required_evidence": [],
+          "requires_human_review": false
+        },
+        "finding_ids": [],
+        "id": "decision_942d6b698a8347688a996b41a7475100",
+        "policy_name": "base+credit-risk@1.0+1.0",
+        "policy_sha256": "4a6edfd56dff865f79ba5a7182093068d143282e2970117e18937861cab50dca",
+        "reason": "Action not covered by the policy: when in doubt, ask a human.",
+        "rule_id": "default",
+        "run_id": "run_c0dd948eb5b74380993cc014cf8c51b6",
+        "subject_id": "run_c0dd948eb5b74380993cc014cf8c51b6",
+        "subject_kind": "run"
+      },
+      "previous_condition": "active",
+      "previous_outcome": null,
+      "previous_stage": "planning",
+      "previous_wait_reason": null,
+      "resume_from": "plan",
+      "stage": "planning",
+      "state": {
+        "condition": "waiting",
+        "outcome": null,
+        "stage": "planning",
+        "version": 14,
+        "wait_reason": "approval"
+      },
+      "to_version": 14,
+      "wait_reason": "approval"
+    }
+  },
+  "tool_calls_started": 0,
+  "followup_submitted": false
+}

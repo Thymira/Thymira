@@ -1,0 +1,254 @@
+{
+  "root": "C:/Users/carlo/AppData/Local/Temp/thymira-historical-followup-tsntmx1o",
+  "run_id": "run_758b895f368d43b3ac38b705c40b4181",
+  "events": [
+    {
+      "seq": 290,
+      "type": "human.approval",
+      "hash": "6346b12fad3b039a6ed3ee31a44ff67601afac86e331c6231cfd8229c77aae41",
+      "payload": {
+        "approved": true,
+        "automatic": false,
+        "decision_id": "decision_55da8c8e69d04b50a7f2e41e4ce59eb5",
+        "note": "Operator inspected the exact isolated research review scope."
+      }
+    },
+    {
+      "seq": 291,
+      "type": "run.transitioned",
+      "hash": "a29b9922a8eef235b6a9ff9cd09b46a40dafe40eb3a48770a231bf8f0ac84cc7",
+      "payload": {
+        "approved_by": {
+          "authenticated": true,
+          "id": "isolated-smoke-operator",
+          "kind": "human",
+          "role": "admin"
+        },
+        "command": "resume",
+        "condition": "active",
+        "from_version": 22,
+        "outcome": null,
+        "previous_condition": "waiting",
+        "previous_outcome": null,
+        "previous_stage": "planning",
+        "previous_wait_reason": "approval",
+        "resume_from": "execution_start",
+        "stage": "planning",
+        "state": {
+          "condition": "active",
+          "outcome": null,
+          "stage": "planning",
+          "version": 23,
+          "wait_reason": null
+        },
+        "to_version": 23,
+        "wait_reason": null
+      }
+    },
+    {
+      "seq": 293,
+      "type": "policy.decision",
+      "hash": "763f197dab6e3800fe40da973b05216dc1d4e1d55d3cf861ab5b5ed4225a0e3e",
+      "payload": {
+        "decision": "PASS",
+        "execution_constraints": {
+          "allowed_tools": [],
+          "local_execution_only": false,
+          "max_tool_calls": null,
+          "prohibited_actions": [],
+          "prohibited_tools": [],
+          "required_evidence": [],
+          "requires_human_review": false
+        },
+        "finding_ids": [],
+        "id": "decision_005a8734dc2f40e39698960cdda7d99b",
+        "policy_name": "base+credit-risk@1.0+1.0",
+        "policy_sha256": "4a6edfd56dff865f79ba5a7182093068d143282e2970117e18937861cab50dca",
+        "reason": "Usage is within every budget ceiling.",
+        "rule_id": "budget_within_limits",
+        "run_id": "run_758b895f368d43b3ac38b705c40b4181",
+        "subject_id": "run_758b895f368d43b3ac38b705c40b4181",
+        "subject_kind": "run"
+      }
+    },
+    {
+      "seq": 295,
+      "type": "policy.decision",
+      "hash": "5379694c4e1a9bcdea5b91fa64023e141bc1e6e7083e6575a18306bc1a9c7258",
+      "payload": {
+        "decision": "PASS",
+        "execution_constraints": {
+          "allowed_tools": [],
+          "local_execution_only": false,
+          "max_tool_calls": null,
+          "prohibited_actions": [],
+          "prohibited_tools": [],
+          "required_evidence": [],
+          "requires_human_review": false
+        },
+        "finding_ids": [],
+        "id": "decision_790715a410974a56850cd9665eab0015",
+        "policy_name": "base+credit-risk@1.0+1.0",
+        "policy_sha256": "4a6edfd56dff865f79ba5a7182093068d143282e2970117e18937861cab50dca",
+        "reason": "No model policy constrains role 'thy'; the model choice authorizes nothing.",
+        "rule_id": "model_default",
+        "run_id": "run_758b895f368d43b3ac38b705c40b4181",
+        "subject_id": "run_758b895f368d43b3ac38b705c40b4181",
+        "subject_kind": "task"
+      }
+    },
+    {
+      "seq": 300,
+      "type": "policy.decision",
+      "hash": "029a7acff6b76f186bb0da15f69102688c5bf4c66bee4c1bb76d66bc95b76ce6",
+      "payload": {
+        "decision": "REQUIRE_HUMAN_REVIEW",
+        "execution_constraints": {
+          "allowed_tools": [],
+          "local_execution_only": false,
+          "max_tool_calls": null,
+          "prohibited_actions": [],
+          "prohibited_tools": [],
+          "required_evidence": [],
+          "requires_human_review": false
+        },
+        "finding_ids": [],
+        "id": "decision_320951458d7649ba9b1c064eeef6e739",
+        "policy_name": "base+credit-risk@1.0+1.0",
+        "policy_sha256": "4a6edfd56dff865f79ba5a7182093068d143282e2970117e18937861cab50dca",
+        "reason": "Action not covered by the policy: when in doubt, ask a human.",
+        "rule_id": "default",
+        "run_id": "run_758b895f368d43b3ac38b705c40b4181",
+        "subject_id": "run_758b895f368d43b3ac38b705c40b4181",
+        "subject_kind": "run"
+      }
+    },
+    {
+      "seq": 301,
+      "type": "human.approval_requested",
+      "hash": "f1b9131834208ba757c3d66cbf1e57f793ad8d3a4c61d76592111b6384ec409c",
+      "payload": {
+        "action_type": "plan.proposed",
+        "decision_id": "decision_320951458d7649ba9b1c064eeef6e739",
+        "plan": {
+          "source_model_id": null,
+          "tasks": [
+            {
+              "agent": "data",
+              "depends_on": [],
+              "id": "task_1",
+              "instruction": "Call profile_dataset(include_plots=true) for the dataset 'german_credit'.",
+              "model_input_ids": [],
+              "phase": "execute",
+              "recovery_of_position": null,
+              "required_artifacts": [],
+              "skill_names": []
+            }
+          ],
+          "work_kind": "general"
+        },
+        "plan_review": {
+          "candidate_sha256": "d12a8be630ddaec77d0652a5da7187936b1b763a8e0f9f7f3512641a2842f6b0",
+          "scope": {
+            "conversation": {
+              "clarification_context": [],
+              "client_message_id": "isolated-turn-1",
+              "context_run_ids": [],
+              "message": "Realiza un EDA descriptivo del dataset german_credit: calidad, valores ausentes, distribuciones y correlaciones numéricas. Usa profile_dataset(include_plots=true). Es investigación retrospectiva: no entrenes modelos ni tomes decisiones sobre solicitantes reales.",
+              "model_inputs": [],
+              "ordinal": 1,
+              "work_kind": "general"
+            },
+            "execution_constraints": {
+              "allowed_tools": [],
+              "local_execution_only": true,
+              "max_tool_calls": null,
+              "prohibited_actions": [],
+              "prohibited_tools": [],
+              "required_evidence": [],
+              "requires_human_review": false
+            },
+            "execution_decision": {
+              "decision": "REQUIRE_HUMAN_REVIEW",
+              "execution_constraints": {
+                "allowed_tools": [],
+                "local_execution_only": true,
+                "max_tool_calls": null,
+                "prohibited_actions": [],
+                "prohibited_tools": [],
+                "required_evidence": [],
+                "requires_human_review": false
+              },
+              "finding_ids": [],
+              "id": "decision_55da8c8e69d04b50a7f2e41e4ce59eb5",
+              "policy_name": "base+credit-risk@1.0+1.0",
+              "policy_sha256": "4a6edfd56dff865f79ba5a7182093068d143282e2970117e18937861cab50dca",
+              "reason": "Execution may start with the Gate-authorised execution constraints. Fail-safe escalation: classification flagged for human review.",
+              "rule_id": "GOV-007",
+              "run_id": "run_758b895f368d43b3ac38b705c40b4181",
+              "subject_id": "run_758b895f368d43b3ac38b705c40b4181",
+              "subject_kind": "run"
+            },
+            "policy_sha256": "4a6edfd56dff865f79ba5a7182093068d143282e2970117e18937861cab50dca",
+            "project_id": "project_efc2cdba41b3f566374d6fa606677ecb",
+            "prompt": "Realiza un EDA descriptivo del dataset german_credit: calidad, valores ausentes, distribuciones y correlaciones numéricas. Usa profile_dataset(include_plots=true). Es investigación retrospectiva: no entrenes modelos ni tomes decisiones sobre solicitantes reales.",
+            "run_id": "run_758b895f368d43b3ac38b705c40b4181",
+            "session_id": "session_0340fb6aa3b14b4fb9d94dd1371e74b3"
+          },
+          "scope_sha256": "439561411e4ba230b4c5808e787247dca0c44ea8d5357710e9e80e78e0d0b7b1",
+          "version": 1
+        },
+        "reason": "Action not covered by the policy: when in doubt, ask a human.",
+        "rule_id": "default",
+        "summary": "Review the proposed plan: task_1: Call profile_dataset(include_plots=true) for the dataset 'german_credit'. (outputs: no named files)"
+      }
+    },
+    {
+      "seq": 304,
+      "type": "run.transitioned",
+      "hash": "08c358dc7131434b922b9acbdbec1d9c15fc382901d4d558a4481ff020e3ed21",
+      "payload": {
+        "command": "wait_for_approval",
+        "condition": "waiting",
+        "from_version": 23,
+        "outcome": null,
+        "policy_decision": {
+          "decision": "REQUIRE_HUMAN_REVIEW",
+          "execution_constraints": {
+            "allowed_tools": [],
+            "local_execution_only": false,
+            "max_tool_calls": null,
+            "prohibited_actions": [],
+            "prohibited_tools": [],
+            "required_evidence": [],
+            "requires_human_review": false
+          },
+          "finding_ids": [],
+          "id": "decision_320951458d7649ba9b1c064eeef6e739",
+          "policy_name": "base+credit-risk@1.0+1.0",
+          "policy_sha256": "4a6edfd56dff865f79ba5a7182093068d143282e2970117e18937861cab50dca",
+          "reason": "Action not covered by the policy: when in doubt, ask a human.",
+          "rule_id": "default",
+          "run_id": "run_758b895f368d43b3ac38b705c40b4181",
+          "subject_id": "run_758b895f368d43b3ac38b705c40b4181",
+          "subject_kind": "run"
+        },
+        "previous_condition": "active",
+        "previous_outcome": null,
+        "previous_stage": "planning",
+        "previous_wait_reason": null,
+        "resume_from": "plan",
+        "stage": "planning",
+        "state": {
+          "condition": "waiting",
+          "outcome": null,
+          "stage": "planning",
+          "version": 24,
+          "wait_reason": "approval"
+        },
+        "to_version": 24,
+        "wait_reason": "approval"
+      }
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 # Contract v0.1 — proposal for MVP day 1
 
-*Status: in force. The current shared-schema version is `0.9`; its operational integration is
+*Status: in force. The current shared-schema version is `0.10`; its operational integration is
 partial and its JSON/JSONL storage semantics are defined in `contract-v0.3.md`. Every change is a
 pull request that also updates the consumers (owner P1).*
 
@@ -18,7 +18,17 @@ pull request that also updates the consumers (owner P1).*
   `PolicyDecision` carries a `Decision` (`PASS | WARNING | REQUIRE_HUMAN_REVIEW | BLOCK`), and
   only the Policy Engine creates one.
 
+### Audit completeness and human review
+
+MIRA report status `incomplete` means a control was not evaluated; failed controls and findings
+remain recorded, and Core cannot close the Run from that report. The optional, exact-context
+exception for indeterminate findings is limited to the registered local `profile_dataset` review
+described in [`runtime/policies/README.md`](../../runtime/policies/README.md).
+
 ## Records
+
+Version 0.10 adds opt-in conversation Session metadata and optional Run conversation input.
+Older records remain readable through defaults; see [conversation sessions](conversation-sessions.md).
 
 | Record | Purpose | Key fields |
 |---|---|---|

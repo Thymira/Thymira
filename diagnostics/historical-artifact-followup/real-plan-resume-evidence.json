@@ -1,0 +1,56 @@
+{
+  "run_id": "run_758b895f368d43b3ac38b705c40b4181",
+  "plan_model_selections": [
+    294
+  ],
+  "plan_requests": [
+    {
+      "seq": 301,
+      "decision_id": "decision_320951458d7649ba9b1c064eeef6e739",
+      "candidate_sha256": "d12a8be630ddaec77d0652a5da7187936b1b763a8e0f9f7f3512641a2842f6b0"
+    }
+  ],
+  "plan_approval": [
+    {
+      "seq": 305,
+      "payload": {
+        "approved": true,
+        "automatic": false,
+        "decision_id": "decision_320951458d7649ba9b1c064eeef6e739",
+        "note": "Operator inspected the exact isolated research review scope."
+      }
+    }
+  ],
+  "task_completion": [
+    {
+      "seq": 331,
+      "status": "COMPLETED",
+      "evidence": {
+        "ignored_tool_call_ids": [],
+        "missing_required_artifacts": [],
+        "plan_task_id": "task_1",
+        "repaired_tool_call_ids": [],
+        "unresolved_tool_call_ids": [],
+        "validation_failures": [],
+        "verified_artifact_ids": []
+      }
+    }
+  ],
+  "profile_artifacts": [
+    {
+      "seq": 321,
+      "name": "profile/german_credit.json",
+      "sha256": "642c5904d757ff973ce360f114831c161f53e99121921bf0d8e49494e604f25d"
+    },
+    {
+      "seq": 322,
+      "name": "profile/german_credit-distributions.png",
+      "sha256": "f7c42c7aa6c861d69f07ed607c0d53ac8f88736559578c245501beb732763014"
+    },
+    {
+      "seq": 323,
+      "name": "profile/german_credit-correlation.png",
+      "sha256": "1db453932aa3b72c9e1f915751a34ff533d4f2de5140c02388983e0c8d90c94a"
+    }
+  ]
+}

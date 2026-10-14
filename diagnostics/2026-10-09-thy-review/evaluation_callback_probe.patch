@@ -1,0 +1,23 @@
+--- tests/thymira/test_model_evaluation_continuation.py
++++ diagnostic-adapter/test_model_evaluation_continuation.py
+@@ -52,6 +52,7 @@
+ from thymira.tools.builtins.run_python import builtins_registry
+ from thymira.tools.datasets import register_dataset
+ from thymira.tools.sandbox import LocalSubprocessSandbox
++from thymira.tools.results import ModelEvaluationValue, reconstruct_value
+ 
+ pytestmark = pytest.mark.integration
+ 
+@@ -228,9 +229,11 @@
+             and event.payload.get("tool") == "evaluate_model"
+             and event.payload.get("status") == ToolCallStatus.COMPLETED
+         )
++        canonical = reconstruct_value(registry.get("evaluate_model"), terminal.payload["value"])
++        assert isinstance(canonical, ModelEvaluationValue)
+         return EvaluationResult(
+             summary="Recorded holdout evaluated.",
+-            metrics_artifact_id=terminal.payload["value"]["artifact_id"],
++            metrics_artifact_id=canonical.artifact_id,
+         )
+ 
+     resumed = run_thy(

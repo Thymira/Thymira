@@ -80,100 +80,156 @@ assesses it. Neither a model output nor an audit finding can authorize an action
 
 ## Quick start
 
+Run the commands below from the repository root (the directory containing this `README.md` and
+`pyproject.toml`). On Windows, use Git Bash. The API and web console are separate processes, so
+keep each running in its own terminal. Neither command opens a browser automatically.
+
 ### Prerequisites
 
 - Python 3.12 or newer
 - [uv](https://docs.astral.sh/uv/)
 - [just](https://github.com/casey/just) (recommended command runner)
-- Docker, for normal confined code execution
+- Docker Desktop running with Linux containers (required for Python and code-execution tools)
 
 ### 1. Install the workspace
 
 ```bash
-uv tool install rust-just
-just setup
-cp .env.example .env
+uv sync --locked --all-groups --all-packages
 ```
 
-On PowerShell, use `Copy-Item` in place of `cp`.
+`just setup` is an equivalent shortcut if `just` is installed. The `--all-packages` flag matters:
+the workspace root is virtual, while `thymira-api` and `thymira-web` are separate members.
 
-Configure `.env` with the credentials and model routes for your provider. Model identifiers are
-configuration, not hard-coded product assumptions.
+If you do not already have an environment file, copy `.env.example` to `.env` and configure the
+provider key and model routes. The example's `<...>` values are placeholders, not runnable model
+IDs. The API loads the nearest `.env` at startup and prints its path; an existing shell variable
+takes precedence over the file. Do not overwrite an existing `.env` with the example.
 
-Every model route you configure must also appear in `THYMIRA_ALLOWED_MODEL_ROUTES`. Leaving that
-allowlist empty denies every model call by design.
+Every exact model ID configured for THY, MIRA or the routing tiers must also appear in the
+comma-separated `THYMIRA_ALLOWED_MODEL_ROUTES`. An empty allowlist denies every model call by
+design. A conversation Session captures this policy when it is created; after changing the
+allowlist, restart the API and create a new Session. Editing `.env` while the API is running does
+not reconfigure that process or an existing Run.
 
-### 2. Prepare the bundled credit-risk example
+### 2. Build the Python sandbox image
+
+Start Docker Desktop and wait for the engine to be running, then run:
 
 ```bash
-cp data/german_credit.csv examples/credit-risk/data/applications.csv
 just docker-build
+```
+
+Without `just`, run `docker build -t thymira:dev .` instead. This creates the required
+`thymira:dev` image; Python and code-execution tools remain unavailable until it exists.
+
+### 3. Prepare the bundled credit-risk example
+
+Optional for opening the interface; do this before running the full dataset/code-execution demo.
+
+```bash
+cp -n data/german_credit.csv examples/credit-risk/data/applications.csv
 ```
 
 The example declares the dataset, EU AI Act and credit-risk governance scope, project policy
 overlay, and research boundary under `examples/credit-risk/.thymira/`.
 
-### 3. Start the local API
+### 4. Start the local API
+
+In terminal A:
 
 ```bash
-uv run thymira-api --workspace examples/credit-risk
+uv run --all-packages thymira-api --workspace examples/credit-risk
 ```
 
-The API listens on `http://127.0.0.1:8000` by default. On startup it creates a local API token and
-prints the path where it was written.
+If it reports `cannot establish the API credential: File exists`, check whether the API is
+already running in another terminal. If it is, keep using that process; do **not** replace its
+credential. If the previous API stopped or crashed and nothing is listening on port `8000`,
+recover the stale token file with the built-in restart option:
 
-In another terminal, point the CLI at the API and provide that token:
+```bash
+uv run --all-packages thymira-api --workspace examples/credit-risk --replace-credential
+```
+
+Do not delete the token file by hand. A recovered start issues a new token, so reconnect any
+open browser tab with the new value.
+
+The API listens on `http://127.0.0.1:8000` by default. On startup it creates a local API token and
+prints the path where it was written (normally
+`examples/credit-risk/.thymira/runtime/api-token`). It prints the path, **not** the token. Keep
+this terminal open. In another Git Bash terminal, read the token locally when the web console
+asks for it:
+
+```bash
+cat examples/credit-risk/.thymira/runtime/api-token
+```
+
+The token is process-specific and may change when the API restarts. Keep it private: never commit
+it, add it to a prompt or share it in logs.
+
+### 5. Start the web console
+
+In terminal B, from the same repository root:
+
+```bash
+uv run --all-packages thymira-web --api-url http://127.0.0.1:8000
+```
+
+Manually open <http://127.0.0.1:8080/> in a browser and paste the token when prompted. Port
+`8080` serves the interface; port `8000` serves the API. Opening `http://127.0.0.1:8000/`
+directly returns `{"detail":"Not Found"}` because the API has no home page.
+
+Create a Session with **New session**, send a message, and open that turn's Run if it requests an
+interview answer or approval. Once the Run finishes, send a follow-up in the same Session. Reload
+the page to check that both turns remain visible. Sending a message invokes configured model
+providers and may incur charges; simply opening the interface and creating a Session does not.
+
+### 6. Use the CLI (optional)
+
+With the API still running, point the CLI at it from another Git Bash terminal:
 
 ```bash
 export THYMIRA_API_URL=http://127.0.0.1:8000
 export THYMIRA_API_TOKEN="$(cat examples/credit-risk/.thymira/runtime/api-token)"
 ```
 
-Keep the token private. Never commit it, add it to a prompt, or share it in logs.
-
-### 4. Start a Run
+Start a standalone Run:
 
 ```bash
-uv run thymira run \
+uv run --all-packages thymira run \
   "Profile the registered dataset, train two baseline classifiers, compare them, and write an evidence-backed report."
 ```
 
 Use the returned Run id with the commands below:
 
 ```bash
-uv run thymira status RUN_ID
-uv run thymira events RUN_ID
-uv run thymira plan RUN_ID
-uv run thymira audit RUN_ID
-uv run thymira experiment RUN_ID
-uv run thymira mlflow RUN_ID
+uv run --all-packages thymira status RUN_ID
+uv run --all-packages thymira events RUN_ID
+uv run --all-packages thymira plan RUN_ID
+uv run --all-packages thymira audit RUN_ID
+uv run --all-packages thymira experiment RUN_ID
+uv run --all-packages thymira mlflow RUN_ID
 ```
 
 A Run may ask bounded risk-interview questions or pause for review. Those are governance controls,
 not failures:
 
 ```bash
-uv run thymira answer RUN_ID "The work is offline research only; no model will make live credit decisions."
-uv run thymira review RUN_ID
-uv run thymira approve RUN_ID --note "Reviewed the recorded evidence and scope."
+uv run --all-packages thymira answer RUN_ID "The work is offline research only; no model will make live credit decisions."
+uv run --all-packages thymira review RUN_ID
+uv run --all-packages thymira approve RUN_ID --note "Reviewed the recorded evidence and scope."
 ```
 
 You can reject or cancel a Run explicitly:
 
 ```bash
-uv run thymira reject RUN_ID --note "Insufficient evidence for this approval."
-uv run thymira cancel RUN_ID
+uv run --all-packages thymira reject RUN_ID --note "Insufficient evidence for this approval."
+uv run --all-packages thymira cancel RUN_ID
 ```
 
 ## Web console
 
-Start the local browser client after starting the API:
-
-```bash
-uv run thymira-web
-```
-
-Open <http://127.0.0.1:8080> and paste the API token when prompted.
+Follow the [quick-start steps](#quick-start) above to start the API and browser client, find the
+token and open the correct URL.
 
 The console lets you:
 
@@ -186,6 +242,18 @@ The console lets you:
 
 The browser keeps the token only in its current session. The console is a thin API client and owns
 no Run state.
+
+### Troubleshooting local startup
+
+- **`Failed to spawn: thymira-web` (or `thymira-api`):** run the command from the workspace root
+  with `uv run --all-packages`, after `uv sync --locked --all-groups --all-packages` if needed.
+- **`cannot establish the API credential: File exists`:** follow the safe restart instructions in
+  [Start the local API](#4-start-the-local-api); never replace a live API's credential.
+- **`{"detail":"Not Found"` in the browser:** open port `8080`, not the API's port `8000`.
+- **`model route ... is not allowed by session policy`:** add the exact selected route to
+  `THYMIRA_ALLOWED_MODEL_ROUTES` in the environment file the API says it loaded. Restart the API
+  after the current Run ends, reconnect with its new token and create a new Session. A live
+  Settings override cannot expand an existing Session's allowlist.
 
 ## Evidence and safety model
 

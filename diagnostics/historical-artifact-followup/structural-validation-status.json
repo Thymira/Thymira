@@ -1,0 +1,60 @@
+{
+  "focused": {
+    "passed": 103
+  },
+  "broad": {
+    "passed": 2106,
+    "skipped": 2,
+    "warnings": 67,
+    "seconds": 284.56
+  },
+  "import_contracts": {
+    "kept": 4,
+    "broken": 0
+  },
+  "real_model_only_probe": {
+    "valid_candidate": true,
+    "model_requests": 1,
+    "tool_calls": 0,
+    "approvals": 0,
+    "runtime_transitions": 0,
+    "source_run_id": "run_7781e29e9fd3456dbe1d8ddd63ead41e",
+    "source_ordinal": 2
+  },
+  "real_continuation": {
+    "run_id": "run_18d9a9bb215b4a7d82d66aa2107983a6",
+    "attempt": 2,
+    "ordinal": 4,
+    "status": "COMPLETED",
+    "pending_decision_id": null,
+    "approval_supplied": true,
+    "pending_action": null,
+    "start_approval_seq": 52,
+    "candidate_sha256": "ba9fda917c8e3b495d0eb37f851f4ed7af7b4626922d127f4bf763824253ebf5",
+    "plan_approval_seq": 67,
+    "data_completion_seq": 93,
+    "missing_required_artifacts": [],
+    "artifact_errors": [],
+    "plan_model_selections": 1,
+    "audit_status": "passed_with_warnings",
+    "A18": "PASSED",
+    "deterministic_summary": {
+      "FAILED": 0,
+      "NOT_APPLICABLE": 16,
+      "NOT_EVALUATED": 0,
+      "PASSED": 14
+    },
+    "review_context_sha256": "d3b5f6fc49f0b9e0d2b98658a48be303502ecd0033f6714cbc1839826c01fa70",
+    "findings_approval_seq": 587,
+    "completion_seq": 591,
+    "completed_event_seq": 592,
+    "event_count": 593,
+    "event_chain_valid": true,
+    "terminal_verdict": [
+      true,
+      "completed with approved human review"
+    ],
+    "limitation": "Success is the fourth-turn retry; failed prior attempts remain preserved. The exact original second-turn model-only probe is separate evidence."
+  },
+  "clean_two_turn_success": false
+}

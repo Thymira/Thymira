@@ -1,0 +1,122 @@
+{
+  "run_id": "run_758b895f368d43b3ac38b705c40b4181",
+  "status": "BLOCKED",
+  "terminal_evidence_valid": true,
+  "verdict": "blocked with policy decision BLOCK",
+  "event_count": 851,
+  "event_chain_valid": true,
+  "artifact_errors": [],
+  "strict_json_profiles": [
+    "profile/german_credit.json"
+  ],
+  "task_completions": [
+    {
+      "agent": "data",
+      "completion_evidence": {
+        "ignored_tool_call_ids": [],
+        "missing_required_artifacts": [],
+        "plan_task_id": "task_1",
+        "repaired_tool_call_ids": [],
+        "unresolved_tool_call_ids": [],
+        "validation_failures": [],
+        "verified_artifact_ids": []
+      },
+      "cost_usd": 0.0013957499999999999,
+      "delegation_depth": 1,
+      "delegation_key": "0641561e619e0a53a4212c174d347c5c9d9d3a852e87eb797998cec0d004cd94",
+      "end_reason": "completed",
+      "input_tokens": 9085,
+      "output_tokens": 375,
+      "parent_agent": "thy",
+      "status": "COMPLETED",
+      "step_key": "c6d7128838918c0b08e88ae39159fc8757a37fd33500959ecffefc921b6e7bb7",
+      "stop_reason": "completed",
+      "task_id": "task_94fc3b4ddb164c43ad3c4a0e85e655c0"
+    }
+  ],
+  "artifacts": [
+    {
+      "name": "profile/german_credit.json",
+      "sha256": "642c5904d757ff973ce360f114831c161f53e99121921bf0d8e49494e604f25d",
+      "valid": true
+    },
+    {
+      "name": "profile/german_credit-distributions.png",
+      "sha256": "f7c42c7aa6c861d69f07ed607c0d53ac8f88736559578c245501beb732763014",
+      "valid": true
+    },
+    {
+      "name": "profile/german_credit-correlation.png",
+      "sha256": "1db453932aa3b72c9e1f915751a34ff533d4f2de5140c02388983e0c8d90c94a",
+      "valid": true
+    }
+  ],
+  "followup_submitted": false,
+  "critical_findings": [
+    {
+      "agent_id": null,
+      "confidence": 1,
+      "control_id": "A18",
+      "created_at": "2026-10-12T22:20:47.057215Z",
+      "evidence": [
+        {
+          "kind": "artifact",
+          "note": null,
+          "ref": "profile/german_credit.json",
+          "sha256": "642c5904d757ff973ce360f114831c161f53e99121921bf0d8e49494e604f25d"
+        },
+        {
+          "kind": "artifact",
+          "note": null,
+          "ref": "datasets/german_credit.schema.json",
+          "sha256": "d73148274bfc1cd7016b49026bf637268fdc01b634f6159ee6fb0c50f045acc1"
+        },
+        {
+          "kind": "artifact",
+          "note": null,
+          "ref": "datasets/german_credit.csv",
+          "sha256": "e28da99f8e65a6cad1146b0cfdbe77778f805b7ffa5b4aadf621145e224b127d"
+        }
+      ],
+      "finding": "profile report 'profile/german_credit.json' using artifact 'datasets/german_credit.schema.json' using artifact 'datasets/german_credit.csv': field correlation/duration_months/0: expected numeric value nan, got None",
+      "framework": "INTERNAL",
+      "id": "finding_d988b143476a165755c8c9418a012523",
+      "recommendation": "Inspect the referenced evidence and repeat the deterministic audit.",
+      "run_id": "run_758b895f368d43b3ac38b705c40b4181",
+      "severity": "CRITICAL",
+      "title": "Report facts match source artifacts"
+    }
+  ],
+  "failed_controls": [
+    {
+      "control_id": "A18",
+      "detail": "profile report 'profile/german_credit.json' using artifact 'datasets/german_credit.schema.json' using artifact 'datasets/german_credit.csv': field correlation/duration_months/0: expected numeric value nan, got None",
+      "evidence": [
+        {
+          "kind": "artifact",
+          "note": null,
+          "ref": "profile/german_credit.json",
+          "sha256": "642c5904d757ff973ce360f114831c161f53e99121921bf0d8e49494e604f25d"
+        },
+        {
+          "kind": "artifact",
+          "note": null,
+          "ref": "datasets/german_credit.schema.json",
+          "sha256": "d73148274bfc1cd7016b49026bf637268fdc01b634f6159ee6fb0c50f045acc1"
+        },
+        {
+          "kind": "artifact",
+          "note": null,
+          "ref": "datasets/german_credit.csv",
+          "sha256": "e28da99f8e65a6cad1146b0cfdbe77778f805b7ffa5b4aadf621145e224b127d"
+        }
+      ],
+      "failure_code": null,
+      "severity": "CRITICAL",
+      "status": "FAILED",
+      "title": "Report facts match source artifacts"
+    }
+  ],
+  "audit_terminal_hash": "19ac3771358450e1d000826d9399f7f0958c694f7f4748ab33a03f306dc0e310",
+  "policy_reason": "A critical finding remains uncertain or its verification metadata is incompatible; its exact descriptive scope is not complete enough for human review: executed capabilities do not establish bounded local profiling."
+}

@@ -66,7 +66,7 @@ Run tools through `uv run …`, never the global `python`. After editing any `py
 
 ## Repository map
 
-- `packages/schemas` (P1) — `thymira.schemas`, **Contract v0.9** (`docs/contracts/contract-v0.1.md`,
+- `packages/schemas` (P1) — `thymira.schemas`, **Contract v0.10** (`docs/contracts/contract-v0.1.md`,
   "Changes"): frozen pydantic models (Run, Session, Agent, Task, ToolCall, Artifact, Experiment,
   Event, AuditFinding, PolicyDecision, ProjectConfig), the Contract 0.3 authorization records
   (`RunState`, `ActionIntent`, `AuthorizationContext`, `Approval`), the Contract 0.4/0.5 MIRA
@@ -166,7 +166,7 @@ Run tools through `uv run …`, never the global `python`. After editing any `py
 Read more: `docs/architecture/e2e-baseline-v2.md` (target design),
 `docs/roadmap/` (`product-final.md` — every task, defined once; `mvp-minimum.md` — what we build
 first and who builds it), `docs/adr/` (decisions), `docs/contracts/contract-v0.1.md` (the shared
-types, currently v0.9), `CONTRIBUTING.md` (workflow).
+types, currently v0.10), `CONTRIBUTING.md` (workflow).
 
 ## Conventions
 

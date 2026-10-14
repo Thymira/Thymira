@@ -54,7 +54,12 @@ One test module per workspace member: `tests/thymira/test_<member>.py`.
 
 - **ruff** lints and formats (`line-length = 100`, the full rule set including docstrings,
   annotations and pylint); config in `pyproject.toml`. Suppress only per line with
-  `# noqa: CODE  # reason`; per-file ignores are for kinds of files (tests, scripts).
+  `# noqa: CODE  # reason`; per-file ignores are for kinds of files (tests, scripts). `just lint`,
+  `just fmt`, `just lint-fix` and CI share `scripts/check_quality.py`: Ruff scans `.py`/`.pyi` in
+  maintained source roots and at the repository root; yamllint scans YAML under those roots,
+  `.github`, and present documentation/config roots, plus authoritative root and example configs.
+  Untracked files inside those owned paths are included. Historical `.tmp-*` review evidence is
+  outside the scan roots and remains intact.
 - **ty** type-checks with a **zero** baseline: `just typecheck-ratchet` fails on any diagnostic.
   Only a ty upgrade may move `.ty-baseline.json` (`scripts/ty_ratchet.py --update-baseline`), in
   the same commit as the pin bump.

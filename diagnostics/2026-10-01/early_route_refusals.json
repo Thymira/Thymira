@@ -1,0 +1,42 @@
+[
+  {
+    "run_id": "run_24d89375554143778d0bba9df2b16afb",
+    "events": 3,
+    "failure_seq": 2,
+    "failure_payload": {
+      "error": "run run_24d89375554143778d0bba9df2b16afb: inline execution failed: model route 'gpt-4o-mini' is not allowed by session policy b8860aec2f0ac97c960703d1cc82433486f0f1496e35768f635398ba6232a22e (version 1)"
+    }
+  },
+  {
+    "run_id": "run_4c64401a7559401fbe80bb8fd5cc53ff",
+    "events": 3,
+    "failure_seq": 2,
+    "failure_payload": {
+      "error": "run run_4c64401a7559401fbe80bb8fd5cc53ff: inline execution failed: model route 'gpt-4o-mini' is not allowed by session policy b8860aec2f0ac97c960703d1cc82433486f0f1496e35768f635398ba6232a22e (version 1)"
+    }
+  },
+  {
+    "run_id": "run_6d11445ac03e4047b2bd841b4f879cbd",
+    "events": 3,
+    "failure_seq": 2,
+    "failure_payload": {
+      "error": "run run_6d11445ac03e4047b2bd841b4f879cbd: inline execution failed: model route 'gpt-4o-mini' is not allowed by session policy b8860aec2f0ac97c960703d1cc82433486f0f1496e35768f635398ba6232a22e (version 1)"
+    }
+  },
+  {
+    "run_id": "run_92b2fd1ad0f94552820149cdde838988",
+    "events": 3,
+    "failure_seq": 2,
+    "failure_payload": {
+      "error": "run run_92b2fd1ad0f94552820149cdde838988: inline execution failed: model route 'gpt-4o-mini' is not allowed by session policy b8860aec2f0ac97c960703d1cc82433486f0f1496e35768f635398ba6232a22e (version 1)"
+    }
+  },
+  {
+    "run_id": "run_9d246eefb1414569900e6f09e7cd2937",
+    "events": 3,
+    "failure_seq": 2,
+    "failure_payload": {
+      "error": "run run_9d246eefb1414569900e6f09e7cd2937: inline execution failed: model route '<unconfigured>' is not allowed by session policy b8860aec2f0ac97c960703d1cc82433486f0f1496e35768f635398ba6232a22e (version 1)"
+    }
+  }
+]

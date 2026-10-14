@@ -1,0 +1,93 @@
+{
+  "run_id": "run_c0dd948eb5b74380993cc014cf8c51b6",
+  "candidate_sha256": "c77330271a018c7ea0b96e9690c4e16484424c3bf540a2c3ceb352986450adef",
+  "plan_model_selections": [
+    {
+      "seq": 192,
+      "payload": {
+        "model": "gpt-4o-mini",
+        "reason": "plan: tier table; THYMIRA_THY_MIN_TIER=FAST matches the thy floor",
+        "role": "thy",
+        "task": "plan",
+        "tier_applied": "FRONTIER",
+        "tier_requested": "FRONTIER"
+      }
+    }
+  ],
+  "plan_review_count": 1,
+  "plan_approval": [
+    {
+      "seq": 203,
+      "payload": {
+        "approved": true,
+        "automatic": false,
+        "decision_id": "decision_942d6b698a8347688a996b41a7475100",
+        "note": "Operator inspected the exact isolated research review scope."
+      },
+      "actor": {
+        "authenticated": true,
+        "id": "isolated-smoke-operator",
+        "kind": "human",
+        "role": "admin"
+      }
+    }
+  ],
+  "data_completion": [
+    {
+      "seq": 229,
+      "payload": {
+        "agent": "data",
+        "completion_evidence": {
+          "ignored_tool_call_ids": [],
+          "missing_required_artifacts": [],
+          "plan_task_id": "1",
+          "repaired_tool_call_ids": [],
+          "unresolved_tool_call_ids": [],
+          "validation_failures": [],
+          "verified_artifact_ids": []
+        },
+        "cost_usd": 0.0014022000000000001,
+        "delegation_depth": 1,
+        "delegation_key": "26406953cf19b6babf4c0310f676e78bd191842e7cdbdc4ac41a1e868d2f443a",
+        "end_reason": "completed",
+        "input_tokens": 9068,
+        "output_tokens": 374,
+        "parent_agent": "thy",
+        "status": "COMPLETED",
+        "step_key": "d625d33c0e5287447730e5747fa0776c75973f5b76ea4f71d93ef4ee52cdf767",
+        "stop_reason": "completed",
+        "task_id": "task_15aeb23bee5a4b9dbb1b1db4bacbfddd"
+      }
+    }
+  ],
+  "profile_artifacts": [
+    {
+      "seq": 219,
+      "payload": {
+        "artifact_id": "artifact_ef1f7f0776e547fba6fe8f179d482753",
+        "name": "profile/german_credit.json",
+        "produced_by": "agent_9764d03514f748a7abb2dcb269904d2f",
+        "sha256": "642c5904d757ff973ce360f114831c161f53e99121921bf0d8e49494e604f25d"
+      }
+    },
+    {
+      "seq": 220,
+      "payload": {
+        "artifact_id": "artifact_5228cdaf51714567985548f79cbbf283",
+        "name": "profile/german_credit-distributions.png",
+        "produced_by": "agent_9764d03514f748a7abb2dcb269904d2f",
+        "sha256": "f7c42c7aa6c861d69f07ed607c0d53ac8f88736559578c245501beb732763014"
+      }
+    },
+    {
+      "seq": 221,
+      "payload": {
+        "artifact_id": "artifact_6d01ab7930444a3a92507a89a5475a8d",
+        "name": "profile/german_credit-correlation.png",
+        "produced_by": "agent_9764d03514f748a7abb2dcb269904d2f",
+        "sha256": "1db453932aa3b72c9e1f915751a34ff533d4f2de5140c02388983e0c8d90c94a"
+      }
+    }
+  ],
+  "followup_submitted": false
+}

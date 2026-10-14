@@ -1,0 +1,2280 @@
+{
+  "run_id": "run_18d9a9bb215b4a7d82d66aa2107983a6",
+  "decision_id": "decision_a14d56c1e05e4fd4980e499e88ec61b8",
+  "verification": {
+    "chain_valid": true,
+    "event_count": 586,
+    "request_seq": 584,
+    "audit_seq": 582,
+    "audit_status": "passed_with_warnings",
+    "deterministic_summary": {
+      "FAILED": 0,
+      "NOT_APPLICABLE": 16,
+      "NOT_EVALUATED": 0,
+      "PASSED": 14
+    },
+    "A18": "PASSED",
+    "findings": 24,
+    "severities": {
+      "HIGH": 16,
+      "MEDIUM": 8
+    },
+    "all_supported_null": true,
+    "context_sha256": "d3b5f6fc49f0b9e0d2b98658a48be303502ecd0033f6714cbc1839826c01fa70",
+    "report_sha256": "2be1e81d23b3b4070f509887a33a19f745266049bed219b36b1e5953c0ea1b93",
+    "bounded_local_descriptive_scope": true,
+    "action_hashes": 23,
+    "artifact_errors": []
+  },
+  "request": {
+    "cost_so_far": {
+      "cost_usd": 0.04311405,
+      "requests": 59,
+      "tokens": 331320,
+      "tool_calls": 23
+    },
+    "decision_id": "decision_a14d56c1e05e4fd4980e499e88ec61b8",
+    "finding_review_context": {
+      "action_event_hashes": [
+        "e77b63e63803397e85d9c5ed8e9791f31707a6044ec0113dfe4b5a4529563be4",
+        "fb108ca766238f006c1279790200a111bcadfd46b842936beefdac684222abf2",
+        "9cefbc550c74f495514465c06ee0c3e4651f13c8b8bde75648d255d8d665439a",
+        "e70a14a16243b57548aefef9590962dec035579a7440d6e5b8b38958e3771a61",
+        "20ad56893e79fc0675ef427d25a937ddc1251869b6908f35e6ec394ae82007f6",
+        "4739c9b6d5f25d285c862ddd933854b0baaa5890b214e96ee93b563045475f69",
+        "267705e4d153145712d273f828c0da4e2232afe8c4f483934f6f46e6f7904923",
+        "ff2d88e547c81a9a29f336d13fc0408df716cd8610c697d4619faee063fe66e1",
+        "fc50d38c8eda66642154c0d852cd429dbf6f59142fd278060551d0eba2a57936",
+        "354e80c586ed4f0cfbf6a4398d054d21d77863dfc49b5935e4da1e42d91b8bb5",
+        "d458573210fc7e46976ec9d5ac9a09d3e78427eba9da3728192b21f1c3c9c5e8",
+        "3bb5739f3ad7fb868a83fa33a5329d7cc261723abc07287bac72c0ed30ece55e",
+        "25a3f1ebd83e2d5a0faf7061e9d93752bd397b6f310eaf20c2d581ea56c88caa",
+        "67f1af7cf31b29644544642eb217c32ed804b111819eaf70125fcd2dfc416ba4",
+        "195926d1464a94c8fa3f98859127b2827935c58af3f6eca7f1ed104e95462079",
+        "b9fd9444ff20a31aba763191b0d765d9be6dd67e56e41763984448217beb034a",
+        "b89dc4468879e8f4c4bd44201e8dd37a82bed9f373b09460f30ac04ea9477aef",
+        "2817b072f0bb575b7ebf992c7427c4233bac397c0591e65983df5086873f4f55",
+        "64b9767969cedb53c6e19d8759ec5c6d3f331cc69e7a0ffb0cd7a9953c387b43",
+        "6cffb4d7963fba9b9a57b738bcc8f36bec2aad51158cec89e36ba80f012d3b02",
+        "d667910fe04a22de16eec170c688a78e74bfbcd8a0c601704c5349c26d991547",
+        "41d9c1e16d48105e4813c2e5fd2cb3885be0ff751bf03a8c1a196dacb24106ed",
+        "3a17d0f8e7e359dbde5e67568b925268716d9dea3540e10471c647ba875875c6"
+      ],
+      "artifact_manifest_sha256": "5c248aa566da80f2010eebe7b6c7d371c7faa70681f07363a3b162968297c339",
+      "audit_complete": true,
+      "audit_completed_hash": "409fd1b7c05d05f608aee15bdffc393839887362e524fe218c0f18f32d8a80ee",
+      "audit_completed_seq": 582,
+      "audit_revision": 1,
+      "audit_terminal_hash": "0413e2b90a3d2c680e601b93c8e49289e44d455aa0ad4b9984b4f11e8d69c0e4",
+      "audit_terminal_seq": 581,
+      "bounded_local_descriptive_scope": true,
+      "candidates": [],
+      "capabilities": [
+        {
+          "data_access": [
+            "dataset"
+          ],
+          "external_effects": [],
+          "id": "profile_dataset",
+          "reversibility": "reversible",
+          "risk_tags": [],
+          "sandbox_mode": null,
+          "side_effects": [
+            "artifact_write"
+          ]
+        },
+        {
+          "data_access": [
+            "regulation_store"
+          ],
+          "external_effects": [],
+          "id": "search_regulation",
+          "reversibility": "reversible",
+          "risk_tags": [],
+          "sandbox_mode": null,
+          "side_effects": []
+        },
+        {
+          "data_access": [
+            "regulation_store"
+          ],
+          "external_effects": [],
+          "id": "search_regulation",
+          "reversibility": "reversible",
+          "risk_tags": [],
+          "sandbox_mode": null,
+          "side_effects": []
+        },
+        {
+          "data_access": [
+            "regulation_store"
+          ],
+          "external_effects": [],
+          "id": "search_regulation",
+          "reversibility": "reversible",
+          "risk_tags": [],
+          "sandbox_mode": null,
+          "side_effects": []
+        },
+        {
+          "data_access": [
+            "regulation_store"
+          ],
+          "external_effects": [],
+          "id": "search_regulation",
+          "reversibility": "reversible",
+          "risk_tags": [],
+          "sandbox_mode": null,
+          "side_effects": []
+        },
+        {
+          "data_access": [
+            "regulation_store"
+          ],
+          "external_effects": [],
+          "id": "search_regulation",
+          "reversibility": "reversible",
+          "risk_tags": [],
+          "sandbox_mode": null,
+          "side_effects": []
+        },
+        {
+          "data_access": [
+            "regulation_store"
+          ],
+          "external_effects": [],
+          "id": "search_regulation",
+          "reversibility": "reversible",
+          "risk_tags": [],
+          "sandbox_mode": null,
+          "side_effects": []
+        },
+        {
+          "data_access": [
+            "regulation_store"
+          ],
+          "external_effects": [],
+          "id": "search_regulation",
+          "reversibility": "reversible",
+          "risk_tags": [],
+          "sandbox_mode": null,
+          "side_effects": []
+        },
+        {
+          "data_access": [
+            "regulation_store"
+          ],
+          "external_effects": [],
+          "id": "search_regulation",
+          "reversibility": "reversible",
+          "risk_tags": [],
+          "sandbox_mode": null,
+          "side_effects": []
+        },
+        {
+          "data_access": [
+            "regulation_store"
+          ],
+          "external_effects": [],
+          "id": "search_regulation",
+          "reversibility": "reversible",
+          "risk_tags": [],
+          "sandbox_mode": null,
+          "side_effects": []
+        },
+        {
+          "data_access": [
+            "regulation_store"
+          ],
+          "external_effects": [],
+          "id": "search_regulation",
+          "reversibility": "reversible",
+          "risk_tags": [],
+          "sandbox_mode": null,
+          "side_effects": []
+        },
+        {
+          "data_access": [
+            "regulation_store"
+          ],
+          "external_effects": [],
+          "id": "search_regulation",
+          "reversibility": "reversible",
+          "risk_tags": [],
+          "sandbox_mode": null,
+          "side_effects": []
+        },
+        {
+          "data_access": [
+            "regulation_store"
+          ],
+          "external_effects": [],
+          "id": "search_regulation",
+          "reversibility": "reversible",
+          "risk_tags": [],
+          "sandbox_mode": null,
+          "side_effects": []
+        },
+        {
+          "data_access": [
+            "regulation_store"
+          ],
+          "external_effects": [],
+          "id": "search_regulation",
+          "reversibility": "reversible",
+          "risk_tags": [],
+          "sandbox_mode": null,
+          "side_effects": []
+        },
+        {
+          "data_access": [
+            "regulation_store"
+          ],
+          "external_effects": [],
+          "id": "search_regulation",
+          "reversibility": "reversible",
+          "risk_tags": [],
+          "sandbox_mode": null,
+          "side_effects": []
+        },
+        {
+          "data_access": [
+            "regulation_store"
+          ],
+          "external_effects": [],
+          "id": "search_regulation",
+          "reversibility": "reversible",
+          "risk_tags": [],
+          "sandbox_mode": null,
+          "side_effects": []
+        },
+        {
+          "data_access": [
+            "regulation_store"
+          ],
+          "external_effects": [],
+          "id": "search_regulation",
+          "reversibility": "reversible",
+          "risk_tags": [],
+          "sandbox_mode": null,
+          "side_effects": []
+        },
+        {
+          "data_access": [
+            "regulation_store"
+          ],
+          "external_effects": [],
+          "id": "search_regulation",
+          "reversibility": "reversible",
+          "risk_tags": [],
+          "sandbox_mode": null,
+          "side_effects": []
+        },
+        {
+          "data_access": [
+            "regulation_store"
+          ],
+          "external_effects": [],
+          "id": "search_regulation",
+          "reversibility": "reversible",
+          "risk_tags": [],
+          "sandbox_mode": null,
+          "side_effects": []
+        },
+        {
+          "data_access": [
+            "regulation_store"
+          ],
+          "external_effects": [],
+          "id": "search_regulation",
+          "reversibility": "reversible",
+          "risk_tags": [],
+          "sandbox_mode": null,
+          "side_effects": []
+        },
+        {
+          "data_access": [
+            "regulation_store"
+          ],
+          "external_effects": [],
+          "id": "search_regulation",
+          "reversibility": "reversible",
+          "risk_tags": [],
+          "sandbox_mode": null,
+          "side_effects": []
+        },
+        {
+          "data_access": [
+            "regulation_store"
+          ],
+          "external_effects": [],
+          "id": "search_regulation",
+          "reversibility": "reversible",
+          "risk_tags": [],
+          "sandbox_mode": null,
+          "side_effects": []
+        },
+        {
+          "data_access": [
+            "regulation_store"
+          ],
+          "external_effects": [],
+          "id": "search_regulation",
+          "reversibility": "reversible",
+          "risk_tags": [],
+          "sandbox_mode": null,
+          "side_effects": []
+        }
+      ],
+      "context_sha256": "d3b5f6fc49f0b9e0d2b98658a48be303502ecd0033f6714cbc1839826c01fa70",
+      "eligible_finding_ids": [],
+      "finding_ids": [
+        "finding_c34f3517888542b6b87c2152581e841a",
+        "finding_b6a874f03da94fabbe9a28206f78802b",
+        "finding_a6131f8a4a094a9fa26ee09b114ab390",
+        "finding_c77e6c1eb8924b35ba51ed49947cb050",
+        "finding_28337ce9e33c4463a6472ab3e6307234",
+        "finding_764aeb1e453a4fe3b421638ecb6a437e",
+        "finding_1d70840fb4c843f09e43f68180802c9b",
+        "finding_9ee86a7275324fc69bf74fda59be535e",
+        "finding_90afe8c483434a7aa830cd7476454d8d",
+        "finding_54389eec66884b0090ea5ad44e92f65e",
+        "finding_943f699a543e4890849690feb3ca19fd",
+        "finding_2d2d88b8081a4ce6a13b23146036061c",
+        "finding_b997dd6f2d4746d7a0c24db92c350183",
+        "finding_bf041b251c424920beaf9c2078849d3e",
+        "finding_26655e0c7d3a4afbbc2e16a0c49fbb3a",
+        "finding_04f73c3b8bd4453c8d71780aad94e14c",
+        "finding_fb81a767b8c34fd299021a93466aab58",
+        "finding_c26aed118b4d4ec58e01436c94b3a638",
+        "finding_e5c4c5917cad4b19b4dc20df3d5cdac5",
+        "finding_c8b892d155424d3cb3987b7a343e359d",
+        "finding_fd4960edb6c24aacab575f49c4e74165",
+        "finding_78be4547e82d43fdbb19cefd1bdd22a2",
+        "finding_762a488231e9410fae8e00b9029115cf",
+        "finding_ed5abf76b89d42d0aa4acca2bc66fe47"
+      ],
+      "findings_sha256": "51fdc81d7c68bdef7d84d460c6e3d099a69020ae332e1516b0ea33c4f0527ac2",
+      "policy_sha256": "4a6edfd56dff865f79ba5a7182093068d143282e2970117e18937861cab50dca",
+      "profile_id": "profile_2e57e8fb0df74807a6a9b49c9af36b40",
+      "profile_version": 10,
+      "report_sha256": "2be1e81d23b3b4070f509887a33a19f745266049bed219b36b1e5953c0ea1b93",
+      "run_snapshot_sha256": "e653c99586d07a21b30a09a6797fefc301c8b4e9541234318be800f8128faa3b",
+      "scope_reason": "registered profile_dataset executed locally with artifact-only effects",
+      "scope_sha256": "e42d8b06ae135d880e82ce95519d49e065b1eaa7e47ca57c805836419665c8d5"
+    },
+    "reason": "A high-severity regulatory finding requires human review before the run completes.",
+    "rule_id": "CR-102",
+    "summary": "audit findings"
+  },
+  "report": {
+    "activity_profile_id": "profile_2e57e8fb0df74807a6a9b49c9af36b40",
+    "activity_profile_version": 10,
+    "applicability_assessments": [
+      {
+        "activity_profile_id": "profile_2e57e8fb0df74807a6a9b49c9af36b40",
+        "activity_profile_version": 10,
+        "applicability": {
+          "concrete_action": "The dataset contains sensitive attributes used in analysis, as reflected in the activity profile details.",
+          "evidence": [
+            {
+              "kind": "event",
+              "note": null,
+              "ref": "seq:28",
+              "sha256": "f14a0d99bdef4b93c1fd479e2a929e760a50fa1206f74166ea6b27f57330485b"
+            },
+            {
+              "kind": "event",
+              "note": null,
+              "ref": "seq:29",
+              "sha256": "7807a44b943f4214bfe417c94def0686633b5c36d381e20ccec713e3c8789004"
+            }
+          ],
+          "rationale": "The finding concerns sensitive attributes affecting lending decisions, which align with the recorded activity profile related to credit assessments.",
+          "status": "applicable"
+        },
+        "audit_mode": "IN_FLIGHT",
+        "control_id": "model:CREDIT-PROTECTED-ATTRIBUTE",
+        "finding_id": "finding_c34f3517888542b6b87c2152581e841a",
+        "snapshot_head_hash": "9869a8da3d4a3f88e92a1d7b9b295a0d509d889c773fc61eb3111e0647f5a38b",
+        "snapshot_head_seq": 98,
+        "supported": null,
+        "verification_rationale": "The finding indicates that sensitive attributes such as age and personal status (sex) are used in the analysis, posing risks to the fairness of lending decisions. However, the projection does not provide sufficient evidence of the dataset's specific composition, nor does it clarify whether sensitive attributes were justified for inclusion in the analysis. Since the visibility of recorded evidence regarding sensitive attribute usage is insufficient to determine its truth, supported is set to null."
+      },
+      {
+        "activity_profile_id": "profile_2e57e8fb0df74807a6a9b49c9af36b40",
+        "activity_profile_version": 10,
+        "applicability": {
+          "concrete_action": "audit started for an assessment of credit risk modeling",
+          "evidence": [
+            {
+              "kind": "event",
+              "note": "activity profile recorded",
+              "ref": "seq:28",
+              "sha256": "f14a0d99bdef4b93c1fd479e2a929e760a50fa1206f74166ea6b27f57330485b"
+            },
+            {
+              "kind": "event",
+              "note": "audit started event",
+              "ref": "seq:29",
+              "sha256": "7807a44b943f4214bfe417c94def0686633b5c36d381e20ccec713e3c8789004"
+            }
+          ],
+          "rationale": "The finding concerns the rights of consumers in relation to creditworthiness assessments, which is directly relevant to the activity involving historical German credit applicants in the dataset utilized for model training and decision-making.",
+          "status": "applicable"
+        },
+        "audit_mode": "IN_FLIGHT",
+        "control_id": "model:CREDIT-ADVERSE-ACTION",
+        "finding_id": "finding_b6a874f03da94fabbe9a28206f78802b",
+        "snapshot_head_hash": "9869a8da3d4a3f88e92a1d7b9b295a0d509d889c773fc61eb3111e0647f5a38b",
+        "snapshot_head_seq": 98,
+        "supported": null,
+        "verification_rationale": "The candidate finding addresses whether consumers can obtain a comprehensible explanation of the creditworthiness assessment and related rights, which may require specific recorded evidence about consumer interaction and feedback opportunities. However, the visible evidence does not include pertinent records to assess these claims directly. As a result, it remains unclear if the requirements for consumer explanation and review access are met or not, leading to an inability to support or refute the finding."
+      },
+      {
+        "activity_profile_id": "profile_2e57e8fb0df74807a6a9b49c9af36b40",
+        "activity_profile_version": 10,
+        "applicability": {
+          "concrete_action": "",
+          "evidence": [],
+          "rationale": "Applicability was left undetermined because the judgment cites an absent, stale, or non-event reference.",
+          "status": "undetermined"
+        },
+        "audit_mode": "IN_FLIGHT",
+        "control_id": "model:CREDIT-SUBGROUP-DISPARITY",
+        "finding_id": "finding_a6131f8a4a094a9fa26ee09b114ab390",
+        "snapshot_head_hash": "9869a8da3d4a3f88e92a1d7b9b295a0d509d889c773fc61eb3111e0647f5a38b",
+        "snapshot_head_seq": 98,
+        "supported": null,
+        "verification_rationale": "The candidate finding claims that there's no evidence to assess performance or selection rates across groups defined by sensitive attributes, thus subgroup disparity cannot be ruled out. However, the visible evidence doesn't include the necessary content to conclusively support or refute this claim, as it only references events without exposing their detailed contents. The audit mode is IN_FLIGHT and evidence content is required for a clear determination."
+      },
+      {
+        "activity_profile_id": "profile_2e57e8fb0df74807a6a9b49c9af36b40",
+        "activity_profile_version": 10,
+        "applicability": {
+          "concrete_action": "activity profile recording",
+          "evidence": [
+            {
+              "kind": "event",
+              "note": "Activity profile recording logged which indicates an action taken, but not sufficient for determining integrity.",
+              "ref": "seq:28",
+              "sha256": "f14a0d99bdef4b93c1fd479e2a929e760a50fa1206f74166ea6b27f57330485b"
+            }
+          ],
+          "rationale": "The finding concerns record-keeping which is relevant to the activity's purpose in the scope of the audit.",
+          "status": "applicable"
+        },
+        "audit_mode": "IN_FLIGHT",
+        "control_id": "model:EU-AI-ACT-ART-12",
+        "finding_id": "finding_c77e6c1eb8924b35ba51ed49947cb050",
+        "snapshot_head_hash": "9869a8da3d4a3f88e92a1d7b9b295a0d509d889c773fc61eb3111e0647f5a38b",
+        "snapshot_head_seq": 98,
+        "supported": null,
+        "verification_rationale": "The evidence does not provide sufficient information regarding the completeness and traceability of the logged events corresponding to the activity as required by Article 12. While event sequence 28 indicates the recording of the activity profile, material content needed to determine overall integrity and completeness of actions and decisions is absent."
+      },
+      {
+        "activity_profile_id": "profile_2e57e8fb0df74807a6a9b49c9af36b40",
+        "activity_profile_version": 10,
+        "applicability": {
+          "concrete_action": "activity_profile.recorded",
+          "evidence": [
+            {
+              "kind": "event",
+              "note": null,
+              "ref": "seq:28",
+              "sha256": "f14a0d99bdef4b93c1fd479e2a929e760a50fa1206f74166ea6b27f57330485b"
+            },
+            {
+              "kind": "event",
+              "note": null,
+              "ref": "seq:29",
+              "sha256": "7807a44b943f4214bfe417c94def0686633b5c36d381e20ccec713e3c8789004"
+            }
+          ],
+          "rationale": "The finding directly pertains to the oversight mechanisms mentioned in the activity profile context, which involves the roles of a Lead Data Scientist and Credit Risk Manager overseeing automated processes.",
+          "status": "applicable"
+        },
+        "audit_mode": "IN_FLIGHT",
+        "control_id": "model:EU-AI-ACT-ART-14",
+        "finding_id": "finding_28337ce9e33c4463a6472ab3e6307234",
+        "snapshot_head_hash": "9869a8da3d4a3f88e92a1d7b9b295a0d509d889c773fc61eb3111e0647f5a38b",
+        "snapshot_head_seq": 98,
+        "supported": null,
+        "verification_rationale": "The candidate finding concerns the clarity of the human oversight structure in relation to automated processes during decision-making. The available evidence does not contain specific details about the mechanisms for human intervention, which is crucial to validate the claim made in the finding. While the activity profile notes the presence of a Lead Data Scientist and Credit Risk Manager, it lacks material evidence showing that these roles can effectively intervene at critical decision points. Therefore, without the content of the omitted records, it remains unclear if such oversight exists. Thus, I assess the evidence regarding oversight capabilities as insufficiently detailed to reach a conclusion, leading to a determination of null support for the finding."
+      },
+      {
+        "activity_profile_id": "profile_2e57e8fb0df74807a6a9b49c9af36b40",
+        "activity_profile_version": 10,
+        "applicability": {
+          "concrete_action": "The activity profile indicates a purpose of offline data-science research assessing a historical dataset, which logically relates to the documentation requirement for compliance with the EU AI Act.",
+          "evidence": [
+            {
+              "kind": "event",
+              "note": null,
+              "ref": "seq:28",
+              "sha256": "f14a0d99bdef4b93c1fd479e2a929e760a50fa1206f74166ea6b27f57330485b"
+            },
+            {
+              "kind": "event",
+              "note": null,
+              "ref": "seq:29",
+              "sha256": "7807a44b943f4214bfe417c94def0686633b5c36d381e20ccec713e3c8789004"
+            }
+          ],
+          "rationale": "The control concerning technical documentation pertains directly to the processes related to data science activities, which involve the analysis of historical datasets, particularly in sensitive domains such as credit assessment.",
+          "status": "applicable"
+        },
+        "audit_mode": "IN_FLIGHT",
+        "control_id": "model:EU-AI-ACT-ART-11",
+        "finding_id": "finding_764aeb1e453a4fe3b421638ecb6a437e",
+        "snapshot_head_hash": "9869a8da3d4a3f88e92a1d7b9b295a0d509d889c773fc61eb3111e0647f5a38b",
+        "snapshot_head_seq": 98,
+        "supported": null,
+        "verification_rationale": "The evidence indicates that while there are activities related to analysis and oversight, the specific technical documentation required by Article 11 of the EU AI Act is not directly addressed. The projection shows no references to design, capabilities, limitations, or monitoring of the system, which are critical aspects of compliance. However, due to the absence of the detailed content of the technical documentation itself in the evidence, I cannot definitively conclude if the output meets or fails these requirements. Therefore, supported remains undetermined given the need for documentation details that are not present."
+      },
+      {
+        "activity_profile_id": "profile_2e57e8fb0df74807a6a9b49c9af36b40",
+        "activity_profile_version": 10,
+        "applicability": {
+          "concrete_action": "audit started for risk assessment",
+          "evidence": [
+            {
+              "kind": "event",
+              "note": null,
+              "ref": "seq:28",
+              "sha256": "f14a0d99bdef4b93c1fd479e2a929e760a50fa1206f74166ea6b27f57330485b"
+            }
+          ],
+          "rationale": "The control concerns ensuring that sensitive attributes are appropriately managed during analysis and model building, which is relevant to the recorded activity involving sensitive historical credit applicant data.",
+          "status": "applicable"
+        },
+        "audit_mode": "IN_FLIGHT",
+        "control_id": "model:CREDIT-PROTECTED-ATTRIBUTE",
+        "finding_id": "finding_1d70840fb4c843f09e43f68180802c9b",
+        "snapshot_head_hash": "9869a8da3d4a3f88e92a1d7b9b295a0d509d889c773fc61eb3111e0647f5a38b",
+        "snapshot_head_seq": 98,
+        "supported": null,
+        "verification_rationale": "The dataset contains sensitive attributes such as age and personal status (sex), which are mentioned in the candidate finding, but the actual dataset contents and examples of how these attributes are utilized in the analysis are not visible in the evidence. Therefore, it's unclear if they are indeed being used in the manner the finding suggests."
+      },
+      {
+        "activity_profile_id": "profile_2e57e8fb0df74807a6a9b49c9af36b40",
+        "activity_profile_version": 10,
+        "applicability": {
+          "concrete_action": "Assessment of creditworthiness mechanisms for consumers.",
+          "evidence": [
+            {
+              "kind": "event",
+              "note": null,
+              "ref": "seq:28",
+              "sha256": "f14a0d99bdef4b93c1fd479e2a929e760a50fa1206f74166ea6b27f57330485b"
+            }
+          ],
+          "rationale": "The candidate finding pertains to credit risk control, which is relevant given the activities involving historical German credit applicants and the assessment of their creditworthiness.",
+          "status": "applicable"
+        },
+        "audit_mode": "IN_FLIGHT",
+        "control_id": "model:CREDIT-ADVERSE-ACTION",
+        "finding_id": "finding_9ee86a7275324fc69bf74fda59be535e",
+        "snapshot_head_hash": "9869a8da3d4a3f88e92a1d7b9b295a0d509d889c773fc61eb3111e0647f5a38b",
+        "snapshot_head_seq": 98,
+        "supported": null,
+        "verification_rationale": "The evidence does not contain sufficient details to confirm or refute whether consumers can obtain a comprehensible explanation of the creditworthiness assessment. Key contents that could clarify this finding are not visible in the provided evidence."
+      },
+      {
+        "activity_profile_id": "profile_2e57e8fb0df74807a6a9b49c9af36b40",
+        "activity_profile_version": 10,
+        "applicability": {
+          "concrete_action": "",
+          "evidence": [],
+          "rationale": "Applicability was left undetermined because the judgment cites an absent, stale, or non-event reference.",
+          "status": "undetermined"
+        },
+        "audit_mode": "IN_FLIGHT",
+        "control_id": "model:CREDIT-SUBGROUP-DISPARITY",
+        "finding_id": "finding_90afe8c483434a7aa830cd7476454d8d",
+        "snapshot_head_hash": "9869a8da3d4a3f88e92a1d7b9b295a0d509d889c773fc61eb3111e0647f5a38b",
+        "snapshot_head_seq": 98,
+        "supported": null,
+        "verification_rationale": "The evidence for assessing group disparity in performance or selection rates across defined sensitive attributes is incomplete, as the underlying records and content are unavailable, including crucial evidence regarding the measures and analysis of such attributes."
+      },
+      {
+        "activity_profile_id": "profile_2e57e8fb0df74807a6a9b49c9af36b40",
+        "activity_profile_version": 10,
+        "applicability": {
+          "concrete_action": "",
+          "evidence": [],
+          "rationale": "Applicability was left undetermined because the judgment is not grounded in the exact current activity-profile event.",
+          "status": "undetermined"
+        },
+        "audit_mode": "IN_FLIGHT",
+        "control_id": "model:EU-AI-ACT-ART-12",
+        "finding_id": "finding_54389eec66884b0090ea5ad44e92f65e",
+        "snapshot_head_hash": "9869a8da3d4a3f88e92a1d7b9b295a0d509d889c773fc61eb3111e0647f5a38b",
+        "snapshot_head_seq": 98,
+        "supported": null,
+        "verification_rationale": "The audit evidence does not fully substantiate whether the logging system captures all relevant events as required by Article 12 of the EU AI Act. While there is documentation of activities and oversight, the extent to which it meets the traceability requirements cannot be assessed without the complete log details and contents associated with the activities. Hence, the evidence neither supports nor refutes the finding without access to the omitted records."
+      },
+      {
+        "activity_profile_id": "profile_2e57e8fb0df74807a6a9b49c9af36b40",
+        "activity_profile_version": 10,
+        "applicability": {
+          "concrete_action": "",
+          "evidence": [],
+          "rationale": "Applicability was left undetermined because the judgment cites an absent, stale, or non-event reference.",
+          "status": "undetermined"
+        },
+        "audit_mode": "IN_FLIGHT",
+        "control_id": "model:EU-AI-ACT-ART-14",
+        "finding_id": "finding_943f699a543e4890849690feb3ca19fd",
+        "snapshot_head_hash": "9869a8da3d4a3f88e92a1d7b9b295a0d509d889c773fc61eb3111e0647f5a38b",
+        "snapshot_head_seq": 98,
+        "supported": null,
+        "verification_rationale": "The candidate finding claims that there is a lack of clear evidence demonstrating effective oversight by the Lead Data Scientist and Credit Risk Manager. The available evidence shows that these roles can intervene and must review artifacts before downstream activities, but it does not definitively conclude whether their oversight was effectively demonstrated during the operational activities. Important content that could clarify this aspect is missing from the visible evidence, preventing a definitive judgment on the finding."
+      },
+      {
+        "activity_profile_id": "profile_2e57e8fb0df74807a6a9b49c9af36b40",
+        "activity_profile_version": 10,
+        "applicability": {
+          "concrete_action": "",
+          "evidence": [],
+          "rationale": "Applicability is undetermined because required audit context is unavailable.",
+          "status": "undetermined"
+        },
+        "audit_mode": "IN_FLIGHT",
+        "control_id": "model:EU-AI-ACT-ART-11",
+        "finding_id": "finding_2d2d88b8081a4ce6a13b23146036061c",
+        "snapshot_head_hash": "9869a8da3d4a3f88e92a1d7b9b295a0d509d889c773fc61eb3111e0647f5a38b",
+        "snapshot_head_seq": 98,
+        "supported": null,
+        "verification_rationale": "Artifact content is not available to the verifier; an artifact registration and digest alone cannot support a verdict."
+      },
+      {
+        "activity_profile_id": "profile_2e57e8fb0df74807a6a9b49c9af36b40",
+        "activity_profile_version": 10,
+        "applicability": {
+          "concrete_action": "The dataset includes sensitive attributes such as age and personal status (sex) that are stated as used in the analysis.",
+          "evidence": [
+            {
+              "kind": "event",
+              "note": null,
+              "ref": "seq:28",
+              "sha256": "f14a0d99bdef4b93c1fd479e2a929e760a50fa1206f74166ea6b27f57330485b"
+            }
+          ],
+          "rationale": "The control concerning the use of sensitive attributes directly relates to the recorded activity profile focusing on historical German credit applicants, which includes sensitive categories.",
+          "status": "applicable"
+        },
+        "audit_mode": "IN_FLIGHT",
+        "control_id": "model:CREDIT-PROTECTED-ATTRIBUTE",
+        "finding_id": "finding_b997dd6f2d4746d7a0c24db92c350183",
+        "snapshot_head_hash": "9869a8da3d4a3f88e92a1d7b9b295a0d509d889c773fc61eb3111e0647f5a38b",
+        "snapshot_head_seq": 98,
+        "supported": null,
+        "verification_rationale": "The candidate finding states that sensitive attributes such as age and personal status (sex) are used in the analysis, potentially violating data protection regulations. However, while the visibility of sensitive attributes is acknowledged in the description of the activity profile, there is no explicit evidence provided in the events that substantiates or refutes the actual use of these attributes in a manner that could lead to a regulatory violation. The evidence as presented does not allow for a definitive assertion, thus making the finding undetermined in this current context."
+      },
+      {
+        "activity_profile_id": "profile_2e57e8fb0df74807a6a9b49c9af36b40",
+        "activity_profile_version": 10,
+        "applicability": {
+          "concrete_action": "",
+          "evidence": [],
+          "rationale": "Applicability was left undetermined because the judgment cites an absent, stale, or non-event reference.",
+          "status": "undetermined"
+        },
+        "audit_mode": "IN_FLIGHT",
+        "control_id": "model:CREDIT-ADVERSE-ACTION",
+        "finding_id": "finding_bf041b251c424920beaf9c2078849d3e",
+        "snapshot_head_hash": "9869a8da3d4a3f88e92a1d7b9b295a0d509d889c773fc61eb3111e0647f5a38b",
+        "snapshot_head_seq": 98,
+        "supported": null,
+        "verification_rationale": "The candidate finding concerning explainability and the right to contest automated decisions references a lack of clarity in the evidence regarding whether consumers are informed about the creditworthiness assessment process. There is no visible evidence in the current audit evidence that conclusively addresses whether such explanations are provided or the rights afforded to consumers in relation to automated decisions. Therefore, without the necessary evidence to determine this, the supported status is marked as null."
+      },
+      {
+        "activity_profile_id": "profile_2e57e8fb0df74807a6a9b49c9af36b40",
+        "activity_profile_version": 10,
+        "applicability": {
+          "concrete_action": "",
+          "evidence": [],
+          "rationale": "Applicability was left undetermined because the judgment cites an absent, stale, or non-event reference.",
+          "status": "undetermined"
+        },
+        "audit_mode": "IN_FLIGHT",
+        "control_id": "model:CREDIT-SUBGROUP-DISPARITY",
+        "finding_id": "finding_26655e0c7d3a4afbbc2e16a0c49fbb3a",
+        "snapshot_head_hash": "9869a8da3d4a3f88e92a1d7b9b295a0d509d889c773fc61eb3111e0647f5a38b",
+        "snapshot_head_seq": 98,
+        "supported": null,
+        "verification_rationale": "The evidence does not provide sufficient content to assess the performance or selection rates across groups defined by sensitive attributes, which is the focus of the finding. Specifically, the audit evidence events are redacted, and no concrete performance metrics are visible to validate or refute the claim about group disparities. Therefore, it remains undetermined whether the audit finding is supported or not."
+      },
+      {
+        "activity_profile_id": "profile_2e57e8fb0df74807a6a9b49c9af36b40",
+        "activity_profile_version": 10,
+        "applicability": {
+          "concrete_action": "",
+          "evidence": [],
+          "rationale": "Applicability is undetermined because required audit context is unavailable.",
+          "status": "undetermined"
+        },
+        "audit_mode": "IN_FLIGHT",
+        "control_id": "model:EU-AI-ACT-ART-12",
+        "finding_id": "finding_04f73c3b8bd4453c8d71780aad94e14c",
+        "snapshot_head_hash": "9869a8da3d4a3f88e92a1d7b9b295a0d509d889c773fc61eb3111e0647f5a38b",
+        "snapshot_head_seq": 98,
+        "supported": null,
+        "verification_rationale": "A required cited record cannot fit as a complete JSON record."
+      },
+      {
+        "activity_profile_id": "profile_2e57e8fb0df74807a6a9b49c9af36b40",
+        "activity_profile_version": 10,
+        "applicability": {
+          "concrete_action": "The activity profile documentation records the potential for human intervention but does not present evidence of such actions being executed.",
+          "evidence": [
+            {
+              "kind": "event",
+              "note": null,
+              "ref": "seq:28",
+              "sha256": "f14a0d99bdef4b93c1fd479e2a929e760a50fa1206f74166ea6b27f57330485b"
+            },
+            {
+              "kind": "event",
+              "note": null,
+              "ref": "seq:29",
+              "sha256": "7807a44b943f4214bfe417c94def0686633b5c36d381e20ccec713e3c8789004"
+            }
+          ],
+          "rationale": "The finding directly relates to the structure and requirements of the activity profile applicable to the ongoing assessment of sensitive data and oversight roles in the modeling process.",
+          "status": "applicable"
+        },
+        "audit_mode": "IN_FLIGHT",
+        "control_id": "model:EU-AI-ACT-ART-14",
+        "finding_id": "finding_fb81a767b8c34fd299021a93466aab58",
+        "snapshot_head_hash": "9869a8da3d4a3f88e92a1d7b9b295a0d509d889c773fc61eb3111e0647f5a38b",
+        "snapshot_head_seq": 98,
+        "supported": null,
+        "verification_rationale": "The evidence does not provide concrete visibility into any actual human intervention or decision-making related to the activity profile. Review by a Lead Data Scientist or Credit Risk Manager is mentioned but not substantiated by direct, observable actions in the current scope. The evidence required to support or refute the claim of effective human oversight is missing or unavailable."
+      },
+      {
+        "activity_profile_id": "profile_2e57e8fb0df74807a6a9b49c9af36b40",
+        "activity_profile_version": 10,
+        "applicability": {
+          "concrete_action": "The finding relates directly to the adequacy of documentation in the context of the system's operation as authorized under high-risk AI guidelines.",
+          "evidence": [
+            {
+              "kind": "event",
+              "note": "Profile recorded indicating potential documentation requirements.",
+              "ref": "seq:28",
+              "sha256": "f14a0d99bdef4b93c1fd479e2a929e760a50fa1206f74166ea6b27f57330485b"
+            }
+          ],
+          "rationale": "The finding pertains specifically to the required documentation for high-risk AI systems, which is applicable based on the identified control (model:EU-AI-ACT-ART-11) that relates to the artifacts generated in the run.",
+          "status": "applicable"
+        },
+        "audit_mode": "IN_FLIGHT",
+        "control_id": "model:EU-AI-ACT-ART-11",
+        "finding_id": "finding_c26aed118b4d4ec58e01436c94b3a638",
+        "snapshot_head_hash": "9869a8da3d4a3f88e92a1d7b9b295a0d509d889c773fc61eb3111e0647f5a38b",
+        "snapshot_head_seq": 98,
+        "supported": null,
+        "verification_rationale": "The evidence regarding the produced artifacts and documentation pertaining to the system's design, capabilities, limitations, and monitoring is not present. Therefore, it's impossible to determine if the artifacts and documentation adequately cover these aspects, which are prerequisite for assessing the claim about insufficient technical documentation as required by Article 11 for high-risk AI systems."
+      },
+      {
+        "activity_profile_id": "profile_2e57e8fb0df74807a6a9b49c9af36b40",
+        "activity_profile_version": 10,
+        "applicability": {
+          "concrete_action": "Data analysis involving sensitive attributes is referenced, specifically due to the presence of sensitive attributes in the dataset used.",
+          "evidence": [
+            {
+              "kind": "event",
+              "note": null,
+              "ref": "seq:28",
+              "sha256": "f14a0d99bdef4b93c1fd479e2a929e760a50fa1206f74166ea6b27f57330485b"
+            },
+            {
+              "kind": "event",
+              "note": null,
+              "ref": "seq:29",
+              "sha256": "7807a44b943f4214bfe417c94def0686633b5c36d381e20ccec713e3c8789004"
+            }
+          ],
+          "rationale": "The candidate finding pertains to the use of sensitive attributes within the scope of credit risk assessment as indicated in the activity profile.",
+          "status": "applicable"
+        },
+        "audit_mode": "IN_FLIGHT",
+        "control_id": "model:CREDIT-PROTECTED-ATTRIBUTE",
+        "finding_id": "finding_e5c4c5917cad4b19b4dc20df3d5cdac5",
+        "snapshot_head_hash": "9869a8da3d4a3f88e92a1d7b9b295a0d509d889c773fc61eb3111e0647f5a38b",
+        "snapshot_head_seq": 98,
+        "supported": null,
+        "verification_rationale": "The available evidence does not contain the necessary details about the handling of sensitive attributes related to GDPR compliance. While it acknowledges that the dataset includes sensitive attributes like age and personal status (sex), it does not provide sufficient information to determine if they were excluded from the analysis. Therefore, I cannot conclusively support or refute the finding."
+      },
+      {
+        "activity_profile_id": "profile_2e57e8fb0df74807a6a9b49c9af36b40",
+        "activity_profile_version": 10,
+        "applicability": {
+          "concrete_action": "",
+          "evidence": [],
+          "rationale": "Applicability was left undetermined because the judgment cites an absent, stale, or non-event reference.",
+          "status": "undetermined"
+        },
+        "audit_mode": "IN_FLIGHT",
+        "control_id": "model:CREDIT-ADVERSE-ACTION",
+        "finding_id": "finding_c8b892d155424d3cb3987b7a343e359d",
+        "snapshot_head_hash": "9869a8da3d4a3f88e92a1d7b9b295a0d509d889c773fc61eb3111e0647f5a38b",
+        "snapshot_head_seq": 98,
+        "supported": null,
+        "verification_rationale": "The evidence does not directly substantiate nor refute the claim about the lack of clear explanations for automated credit decisions and consumer contestation rights, as the necessary content or records detailing the consumer's ability to understand the assessment process are not available within the provided audit evidence. There are multiple referenced events that might contain pertinent details, but without access to their content, it is not possible to validate the finding definitively."
+      },
+      {
+        "activity_profile_id": "profile_2e57e8fb0df74807a6a9b49c9af36b40",
+        "activity_profile_version": 10,
+        "applicability": {
+          "concrete_action": "The candidate finding is related to analyzing selection rate disparities across sensitive attributes.",
+          "evidence": [
+            {
+              "kind": "event",
+              "note": null,
+              "ref": "seq:28",
+              "sha256": "f14a0d99bdef4b93c1fd479e2a929e760a50fa1206f74166ea6b27f57330485b"
+            },
+            {
+              "kind": "event",
+              "note": null,
+              "ref": "seq:29",
+              "sha256": "7807a44b943f4214bfe417c94def0686633b5c36d381e20ccec713e3c8789004"
+            },
+            {
+              "kind": "event",
+              "note": null,
+              "ref": "seq:37",
+              "sha256": "d35a4b2a1789ac99241fc1e6a508adb8d32e4f93da8b4fefd30f27e8fb73dd73"
+            }
+          ],
+          "rationale": "The finding relates to potential disparities in credit decisions, which is pertinent to the activity profile assessing historical German credit applicants. The recorded activity involves sensitive data, thus the control concerning the audit finding is applicable.",
+          "status": "applicable"
+        },
+        "audit_mode": "IN_FLIGHT",
+        "control_id": "model:CREDIT-SUBGROUP-DISPARITY",
+        "finding_id": "finding_fd4960edb6c24aacab575f49c4e74165",
+        "snapshot_head_hash": "9869a8da3d4a3f88e92a1d7b9b295a0d509d889c773fc61eb3111e0647f5a38b",
+        "snapshot_head_seq": 98,
+        "supported": null,
+        "verification_rationale": "To determine whether the finding regarding performance or selection rates diverging across groups defined by sensitive attributes is supported, specific evidence of performance or selection rates across these diverse demographic groups is required. However, the audit evidence does not provide any event records or content directly addressing these metrics. Therefore, without this vital information, it is indeterminate whether the claim can be substantiated or refuted."
+      },
+      {
+        "activity_profile_id": "profile_2e57e8fb0df74807a6a9b49c9af36b40",
+        "activity_profile_version": 10,
+        "applicability": {
+          "concrete_action": "",
+          "evidence": [],
+          "rationale": "Applicability was left undetermined because the judgment cites an absent, stale, or non-event reference.",
+          "status": "undetermined"
+        },
+        "audit_mode": "IN_FLIGHT",
+        "control_id": "model:EU-AI-ACT-ART-12",
+        "finding_id": "finding_78be4547e82d43fdbb19cefd1bdd22a2",
+        "snapshot_head_hash": "9869a8da3d4a3f88e92a1d7b9b295a0d509d889c773fc61eb3111e0647f5a38b",
+        "snapshot_head_seq": 98,
+        "supported": null,
+        "verification_rationale": "The evidence is insufficient to determine whether the events logged meet the record-keeping requirements of Article 12, as the artifact content is not visible. Therefore, evaluating the comprehensiveness of the recorded events is not possible."
+      },
+      {
+        "activity_profile_id": "profile_2e57e8fb0df74807a6a9b49c9af36b40",
+        "activity_profile_version": 10,
+        "applicability": {
+          "concrete_action": "The activity profile recording indicates roles responsible for oversight but lacks the direct evidence of intervention in the documented run.",
+          "evidence": [
+            {
+              "kind": "event",
+              "note": "Documented activity profile indicating oversight roles.",
+              "ref": "seq:28",
+              "sha256": "f14a0d99bdef4b93c1fd479e2a929e760a50fa1206f74166ea6b27f57330485b"
+            },
+            {
+              "kind": "event",
+              "note": "Audit event indicating initiation of oversight documentation.",
+              "ref": "seq:29",
+              "sha256": "7807a44b943f4214bfe417c94def0686633b5c36d381e20ccec713e3c8789004"
+            },
+            {
+              "kind": "event",
+              "note": "Risk assessment noting engagement with sensitive data requiring oversight.",
+              "ref": "seq:37",
+              "sha256": "d35a4b2a1789ac99241fc1e6a508adb8d32e4f93da8b4fefd30f27e8fb73dd73"
+            }
+          ],
+          "rationale": "The finding addresses the oversight measures relevant to the recorded activity profile, which designates the activity involving sensitive data necessitating human oversight.",
+          "status": "applicable"
+        },
+        "audit_mode": "IN_FLIGHT",
+        "control_id": "model:EU-AI-ACT-ART-14",
+        "finding_id": "finding_762a488231e9410fae8e00b9029115cf",
+        "snapshot_head_hash": "9869a8da3d4a3f88e92a1d7b9b295a0d509d889c773fc61eb3111e0647f5a38b",
+        "snapshot_head_seq": 98,
+        "supported": null,
+        "verification_rationale": "The candidate finding notes potential human oversight by a Lead Data Scientist and Credit Risk Manager but claims insufficient evidence to confirm whether those oversight measures were effectively applied. However, the provided evidence includes several risk assessments and activity profile recordings with the involvement of a system actor, yet it lacks explicit confirmations of oversight interventions by the human actors mentioned, such as user behavior regarding human oversight actions. Consequently, it is undetermined whether effective oversight occurred, as the evidence does not affirm or refute it; the required content is not visible in this projection."
+      },
+      {
+        "activity_profile_id": "profile_2e57e8fb0df74807a6a9b49c9af36b40",
+        "activity_profile_version": 10,
+        "applicability": {
+          "concrete_action": "",
+          "evidence": [],
+          "rationale": "Applicability is undetermined because required audit context is unavailable.",
+          "status": "undetermined"
+        },
+        "audit_mode": "IN_FLIGHT",
+        "control_id": "model:EU-AI-ACT-ART-11",
+        "finding_id": "finding_ed5abf76b89d42d0aa4acca2bc66fe47",
+        "snapshot_head_hash": "9869a8da3d4a3f88e92a1d7b9b295a0d509d889c773fc61eb3111e0647f5a38b",
+        "snapshot_head_seq": 98,
+        "supported": null,
+        "verification_rationale": "Artifact content is not available to the verifier; an artifact registration and digest alone cannot support a verdict."
+      }
+    ],
+    "audit_mode": "IN_FLIGHT",
+    "control_set": "thymira-mira-audit@0.1",
+    "controls": [
+      {
+        "control_id": "A1",
+        "detail": "99 events",
+        "evidence": [],
+        "failure_code": null,
+        "severity": "CRITICAL",
+        "status": "PASSED",
+        "title": "Event chain integrity"
+      },
+      {
+        "control_id": "A3",
+        "detail": "1 executions authorised",
+        "evidence": [],
+        "failure_code": null,
+        "severity": "CRITICAL",
+        "status": "PASSED",
+        "title": "Authorization before tool execution"
+      },
+      {
+        "control_id": "A4",
+        "detail": "no BLOCK decisions",
+        "evidence": [],
+        "failure_code": null,
+        "severity": "CRITICAL",
+        "status": "NOT_APPLICABLE",
+        "title": "No execution after a block"
+      },
+      {
+        "control_id": "A5",
+        "detail": "manifest verified",
+        "evidence": [],
+        "failure_code": null,
+        "severity": "HIGH",
+        "status": "PASSED",
+        "title": "Artifact integrity"
+      },
+      {
+        "control_id": "A6",
+        "detail": "no denials",
+        "evidence": [],
+        "failure_code": null,
+        "severity": "MEDIUM",
+        "status": "NOT_APPLICABLE",
+        "title": "Denials explained by decisions"
+      },
+      {
+        "control_id": "A9",
+        "detail": "every start has an end",
+        "evidence": [],
+        "failure_code": null,
+        "severity": "MEDIUM",
+        "status": "PASSED",
+        "title": "Lifecycle pairing"
+      },
+      {
+        "control_id": "A10",
+        "detail": "6 artifacts present",
+        "evidence": [],
+        "failure_code": null,
+        "severity": "HIGH",
+        "status": "PASSED",
+        "title": "Declared artifacts present"
+      },
+      {
+        "control_id": "A16",
+        "detail": "single snapshot 4a6edfd56dff",
+        "evidence": [],
+        "failure_code": null,
+        "severity": "HIGH",
+        "status": "PASSED",
+        "title": "Single policy snapshot"
+      },
+      {
+        "control_id": "A17",
+        "detail": "provenance recorded",
+        "evidence": [],
+        "failure_code": null,
+        "severity": "LOW",
+        "status": "PASSED",
+        "title": "Provenance recorded"
+      },
+      {
+        "control_id": "A15",
+        "detail": "risk classified before the first tool.started",
+        "evidence": [],
+        "failure_code": null,
+        "severity": "HIGH",
+        "status": "PASSED",
+        "title": "Risk classified before tool execution"
+      },
+      {
+        "control_id": "A19",
+        "detail": "no execution recorded a sandbox enforcement value",
+        "evidence": [],
+        "failure_code": null,
+        "severity": "MEDIUM",
+        "status": "NOT_APPLICABLE",
+        "title": "Confinement enforced"
+      },
+      {
+        "control_id": "A24",
+        "detail": "routing floor respected by every recorded model selection",
+        "evidence": [],
+        "failure_code": null,
+        "severity": "HIGH",
+        "status": "PASSED",
+        "title": "Model routing respects the role floor"
+      },
+      {
+        "control_id": "A11",
+        "detail": "no train/test split evidence",
+        "evidence": [],
+        "failure_code": null,
+        "severity": "CRITICAL",
+        "status": "NOT_APPLICABLE",
+        "title": "Split integrity"
+      },
+      {
+        "control_id": "A20",
+        "detail": "no dataset evidence with an identified target",
+        "evidence": [],
+        "failure_code": null,
+        "severity": "CRITICAL",
+        "status": "NOT_APPLICABLE",
+        "title": "Leakage indicators"
+      },
+      {
+        "control_id": "A12",
+        "detail": "no modelling chain evidence",
+        "evidence": [],
+        "failure_code": null,
+        "severity": "CRITICAL",
+        "status": "NOT_APPLICABLE",
+        "title": "Lineage coherence"
+      },
+      {
+        "control_id": "A18",
+        "detail": "profile report 'profile/german_credit.json' matches registered schema 'datasets/german_credit.schema.json' and dataset 'datasets/german_credit.csv'",
+        "evidence": [
+          {
+            "kind": "artifact",
+            "note": null,
+            "ref": "profile/german_credit.json",
+            "sha256": "642c5904d757ff973ce360f114831c161f53e99121921bf0d8e49494e604f25d"
+          },
+          {
+            "kind": "artifact",
+            "note": null,
+            "ref": "datasets/german_credit.schema.json",
+            "sha256": "d73148274bfc1cd7016b49026bf637268fdc01b634f6159ee6fb0c50f045acc1"
+          },
+          {
+            "kind": "artifact",
+            "note": null,
+            "ref": "datasets/german_credit.csv",
+            "sha256": "e28da99f8e65a6cad1146b0cfdbe77778f805b7ffa5b4aadf621145e224b127d"
+          }
+        ],
+        "failure_code": null,
+        "severity": "CRITICAL",
+        "status": "PASSED",
+        "title": "Report facts match source artifacts"
+      },
+      {
+        "control_id": "A13",
+        "detail": "no model-selection evidence",
+        "evidence": [],
+        "failure_code": null,
+        "severity": "CRITICAL",
+        "status": "NOT_APPLICABLE",
+        "title": "Model selection re-derived independently"
+      },
+      {
+        "control_id": "A14",
+        "detail": "no test-protocol evidence",
+        "evidence": [],
+        "failure_code": null,
+        "severity": "CRITICAL",
+        "status": "NOT_APPLICABLE",
+        "title": "Test partition read once at final evaluation"
+      },
+      {
+        "control_id": "A21",
+        "detail": "no cross-validation evidence",
+        "evidence": [],
+        "failure_code": null,
+        "severity": "CRITICAL",
+        "status": "NOT_APPLICABLE",
+        "title": "Fold-local cross-validation"
+      },
+      {
+        "control_id": "A22",
+        "detail": "no cross-validated candidate evidence",
+        "evidence": [],
+        "failure_code": null,
+        "severity": "LOW",
+        "status": "NOT_APPLICABLE",
+        "title": "Trivial baseline scored on identical folds"
+      },
+      {
+        "control_id": "A23",
+        "detail": "no model.trained events",
+        "evidence": [],
+        "failure_code": null,
+        "severity": "MEDIUM",
+        "status": "NOT_APPLICABLE",
+        "title": "Reproducibility metadata recorded"
+      },
+      {
+        "control_id": "A26",
+        "detail": "4 requirement-control evidence link(s) present",
+        "evidence": [],
+        "failure_code": null,
+        "severity": "MEDIUM",
+        "status": "PASSED",
+        "title": "Requirements coverage"
+      },
+      {
+        "control_id": "A27",
+        "detail": "no context.compacted events",
+        "evidence": [],
+        "failure_code": null,
+        "severity": "HIGH",
+        "status": "NOT_APPLICABLE",
+        "title": "Compaction integrity"
+      },
+      {
+        "control_id": "A28",
+        "detail": "evidence present: agent.completed, artifact",
+        "evidence": [],
+        "failure_code": null,
+        "severity": "HIGH",
+        "status": "PASSED",
+        "title": "Evidence sufficiency"
+      },
+      {
+        "control_id": "A29",
+        "detail": "no execution recorded a sandbox enforcement value",
+        "evidence": [],
+        "failure_code": null,
+        "severity": "HIGH",
+        "status": "NOT_APPLICABLE",
+        "title": "Resolved execution specification"
+      },
+      {
+        "control_id": "A30",
+        "detail": "no execution recorded a sandbox enforcement value",
+        "evidence": [],
+        "failure_code": null,
+        "severity": "HIGH",
+        "status": "NOT_APPLICABLE",
+        "title": "Termination and cleanup evidence"
+      },
+      {
+        "control_id": "A32",
+        "detail": "no execution claimed an enforced workspace quota",
+        "evidence": [],
+        "failure_code": null,
+        "severity": "CRITICAL",
+        "status": "NOT_APPLICABLE",
+        "title": "Workspace quota evidence"
+      },
+      {
+        "control_id": "A31",
+        "detail": "1 delegation settlement(s), each recorded exactly once",
+        "evidence": [],
+        "failure_code": null,
+        "severity": "HIGH",
+        "status": "PASSED",
+        "title": "Subagent settlement"
+      },
+      {
+        "control_id": "A33",
+        "detail": "no discovery call or freshness refusal recorded",
+        "evidence": [],
+        "failure_code": null,
+        "severity": "HIGH",
+        "status": "NOT_APPLICABLE",
+        "title": "Discovery evidence substantiates the rendered result"
+      },
+      {
+        "control_id": "METHODOLOGY-EVIDENCE-001",
+        "detail": "satisfied",
+        "evidence": [
+          {
+            "kind": "event",
+            "note": "run.started",
+            "ref": "seq:0",
+            "sha256": "651a252d5c99cc0ba9f04a5b51d368b2160200f5eb4966ae1604487926a0ffcc"
+          },
+          {
+            "kind": "event",
+            "note": "runtime.attached",
+            "ref": "seq:1",
+            "sha256": "243624a8c8a9b1e241ca1f09a5530d975df2dd87f1127d47edc4da14e5510742"
+          },
+          {
+            "kind": "event",
+            "note": "run.transitioned",
+            "ref": "seq:2",
+            "sha256": "1663424ceba3b90df786e65defd6cd5a46c4f5634077a580f010c474e6ba0d11"
+          },
+          {
+            "kind": "event",
+            "note": "activity_profile.recorded",
+            "ref": "seq:3",
+            "sha256": "e945cd4f3509a8dcdd00c95edeaa2ff1f1219d69679f046c2d3e87c5ae628a61"
+          },
+          {
+            "kind": "event",
+            "note": "policy.decision",
+            "ref": "seq:4",
+            "sha256": "de24c25a32c0610e23bcd14eb4dc7368bbfcf46fa7f4131a84800b8d13514a24"
+          },
+          {
+            "kind": "event",
+            "note": "model.selected",
+            "ref": "seq:5",
+            "sha256": "ed487e2366bc660d733e668796d94761b8cf1054db3135192a8d2773c83377b3"
+          },
+          {
+            "kind": "event",
+            "note": "policy.decision",
+            "ref": "seq:6",
+            "sha256": "394c51cd3f87b575ae641269fa900eefab24323abb1f9ef2c1b9eda69a627644"
+          },
+          {
+            "kind": "event",
+            "note": "model.input_header_revised",
+            "ref": "seq:7",
+            "sha256": "43b469c36303f0b65a66cc3aba3ced5c73da323861df08c58d69346fc3cc8ae3"
+          },
+          {
+            "kind": "event",
+            "note": "model.input_surface_updated",
+            "ref": "seq:8",
+            "sha256": "2b1dce1c2685719ee38f6d0ccd0b4aa997c2089f75da75feb0be0cd460ffcc48"
+          },
+          {
+            "kind": "event",
+            "note": "model.request_recorded",
+            "ref": "seq:9",
+            "sha256": "932975c4b0c65e81e4e7d7bdd132956a81b5eb0b90dd5e71d15ba2bb8fbc9852"
+          },
+          {
+            "kind": "event",
+            "note": "model.response_chunk",
+            "ref": "seq:10",
+            "sha256": "9c7afdeaf643fb282c1f77895560558b88b6d0837a81f84ed6d56e698996f1d7"
+          },
+          {
+            "kind": "event",
+            "note": "activity_profile.answered",
+            "ref": "seq:11",
+            "sha256": "bbc6a186b9b8616008f289a5bdacbd8cd3f48936d425f82754374551493ece4b"
+          },
+          {
+            "kind": "event",
+            "note": "activity_profile.recorded",
+            "ref": "seq:12",
+            "sha256": "a2e2ac2cba1e45563e1b88ab39edc77faacf414af5533dcedeb2d921266659e2"
+          },
+          {
+            "kind": "event",
+            "note": "activity_profile.answered",
+            "ref": "seq:13",
+            "sha256": "d7d01ff6be42d9bc39e76fd02694c874ada00103cdf91158eba1d68b47a7ffb1"
+          },
+          {
+            "kind": "event",
+            "note": "activity_profile.recorded",
+            "ref": "seq:14",
+            "sha256": "4a7695293c61b6fa54a5776357cd68e6daad7144b518b418fae7dd6039f13c5a"
+          },
+          {
+            "kind": "event",
+            "note": "activity_profile.answered",
+            "ref": "seq:15",
+            "sha256": "1a96522951e941da910a9bf710e15709cac97a8ed680b4756a3bd7a49ab5e39b"
+          },
+          {
+            "kind": "event",
+            "note": "activity_profile.recorded",
+            "ref": "seq:16",
+            "sha256": "084b564164bda114ed78fe80c5a82f13225d867f2aa5979d04c7fc1b16fbf5d4"
+          },
+          {
+            "kind": "event",
+            "note": "activity_profile.answered",
+            "ref": "seq:17",
+            "sha256": "f6191a4a2781f0e44d7b6cccff552b1a505806e945926f3ecc15d8c245f79d9b"
+          },
+          {
+            "kind": "event",
+            "note": "activity_profile.recorded",
+            "ref": "seq:18",
+            "sha256": "df8ec576c334edc03ceef87b34e962dc07ddacec40cd8310713d1d89b0873f24"
+          },
+          {
+            "kind": "event",
+            "note": "activity_profile.answered",
+            "ref": "seq:19",
+            "sha256": "80049d7355bd0a5a72405a679f5400efa862a738d0d8648f70c1ca2b2344c058"
+          },
+          {
+            "kind": "event",
+            "note": "activity_profile.recorded",
+            "ref": "seq:20",
+            "sha256": "6c6f03991da54913a36f38fd51bd1a164194135571a1d6a481b222acb6ac97f0"
+          },
+          {
+            "kind": "event",
+            "note": "activity_profile.answered",
+            "ref": "seq:21",
+            "sha256": "48870bbd518143346e1169930da02ed37235b6dc6b9649f4fd05d6671439222d"
+          },
+          {
+            "kind": "event",
+            "note": "activity_profile.recorded",
+            "ref": "seq:22",
+            "sha256": "1d1131ef9ed54b5de113130ea47c1a2d0e9f929933250436dcfee35de427ca00"
+          },
+          {
+            "kind": "event",
+            "note": "activity_profile.answered",
+            "ref": "seq:23",
+            "sha256": "05a881e46631b0f28dae63a4fa6ceea77cf706129990e3234baa7198183190e5"
+          },
+          {
+            "kind": "event",
+            "note": "activity_profile.recorded",
+            "ref": "seq:24",
+            "sha256": "aa778f97f99677e03f31b80395f23e71ba63ee74531fa0704e6ecace2ed16c69"
+          },
+          {
+            "kind": "event",
+            "note": "activity_profile.answered",
+            "ref": "seq:25",
+            "sha256": "4f8688e45dd5c5928cf3af85fff840c1ec29eab4383325dcdbe7645350427a8b"
+          },
+          {
+            "kind": "event",
+            "note": "activity_profile.recorded",
+            "ref": "seq:26",
+            "sha256": "6a238ad41b0ec53dad6a49a781c8ab4cbbc243c5ec57486950848021fb334a17"
+          },
+          {
+            "kind": "event",
+            "note": "activity_profile.answered",
+            "ref": "seq:27",
+            "sha256": "4c9ee00d421612e92f7ae441bcc567be5a2c51a5c0e0d2f80e311d9670e68c9b"
+          },
+          {
+            "kind": "event",
+            "note": "activity_profile.recorded",
+            "ref": "seq:28",
+            "sha256": "f14a0d99bdef4b93c1fd479e2a929e760a50fa1206f74166ea6b27f57330485b"
+          },
+          {
+            "kind": "event",
+            "note": "audit.started",
+            "ref": "seq:29",
+            "sha256": "7807a44b943f4214bfe417c94def0686633b5c36d381e20ccec713e3c8789004"
+          },
+          {
+            "kind": "event",
+            "note": "policy.decision",
+            "ref": "seq:30",
+            "sha256": "ff6d24c6e0eb80373f03d00f24bceb093db9a2cb044284d7b665a9c95b6c6a51"
+          },
+          {
+            "kind": "event",
+            "note": "model.selected",
+            "ref": "seq:31",
+            "sha256": "0f6d9574b90d3e35cbdd782b1a45ec80631cb6b95f9f14e040d072a607ea82a6"
+          },
+          {
+            "kind": "event",
+            "note": "policy.decision",
+            "ref": "seq:32",
+            "sha256": "7cbb711a9f9f821863596ec9da2f7c2a879ab803ec410b97d0778e6e6fd4b803"
+          },
+          {
+            "kind": "event",
+            "note": "model.input_header_revised",
+            "ref": "seq:33",
+            "sha256": "f70c3b05a1d666057dacdca80862b6a3a439819f6de2162f9d5360545f0e51c4"
+          },
+          {
+            "kind": "event",
+            "note": "model.input_surface_updated",
+            "ref": "seq:34",
+            "sha256": "f8be3f7f90d699ed6742916af79cb75d76be45d6e969e328ba8dce186510382e"
+          },
+          {
+            "kind": "event",
+            "note": "model.request_recorded",
+            "ref": "seq:35",
+            "sha256": "5c38af3bc9afea65111fa3f0c5805f6d50d6f22c4590af38906ce9d95a9e0fef"
+          },
+          {
+            "kind": "event",
+            "note": "model.response_chunk",
+            "ref": "seq:36",
+            "sha256": "d2b6e6da5645a4e0290087d1a4a2e4e3db9a9bab78dad0f47ea1260d695cc65f"
+          },
+          {
+            "kind": "event",
+            "note": "risk_assessment.recorded",
+            "ref": "seq:37",
+            "sha256": "d35a4b2a1789ac99241fc1e6a508adb8d32e4f93da8b4fefd30f27e8fb73dd73"
+          },
+          {
+            "kind": "event",
+            "note": "pack_binding.recorded",
+            "ref": "seq:38",
+            "sha256": "ba46b560e00ce4f717c9f28e8f26aa43daf3674a6293ab6526f05925c6eb71b9"
+          },
+          {
+            "kind": "event",
+            "note": "pack_binding.recorded",
+            "ref": "seq:39",
+            "sha256": "49a8d92147ade228c2b16a68942a67943088d70bf6d6e618c28516f023813dd3"
+          },
+          {
+            "kind": "event",
+            "note": "policy.decision",
+            "ref": "seq:40",
+            "sha256": "459c778e05886286351a77069004648dbded8232316808ade52c68414c14e06e"
+          },
+          {
+            "kind": "event",
+            "note": "model.selected",
+            "ref": "seq:41",
+            "sha256": "534bf002691d2101d01dcc9aaa3a7551f2ebc0c8584689f5308e218a93c7012a"
+          },
+          {
+            "kind": "event",
+            "note": "policy.decision",
+            "ref": "seq:42",
+            "sha256": "77c9b44b8d3c948864bd053f760e195c511faeb29870df281f7a706fe887480f"
+          },
+          {
+            "kind": "event",
+            "note": "model.input_header_revised",
+            "ref": "seq:43",
+            "sha256": "b750dbbe0c88a51820b36b398e82042b52e0ba9589f7e1bd9fe805d4e6187bde"
+          },
+          {
+            "kind": "event",
+            "note": "model.input_surface_updated",
+            "ref": "seq:44",
+            "sha256": "605dfa44e675d3745733a670b20639604ceb3b1e242a2e34784320dfdeff8949"
+          },
+          {
+            "kind": "event",
+            "note": "model.request_recorded",
+            "ref": "seq:45",
+            "sha256": "a170e50c6726f45f35c3ccb51ddfb31abe9374cb5d003865940f53c7b15eea2a"
+          },
+          {
+            "kind": "event",
+            "note": "model.response_chunk",
+            "ref": "seq:46",
+            "sha256": "f598f1711d36fafe1f05135a8904ae327ac55f6f5bb00428b71cf3f6f9b57780"
+          },
+          {
+            "kind": "event",
+            "note": "agent.message",
+            "ref": "seq:47",
+            "sha256": "1dd8d5d3191f8a34aaf72e2644320e0c6c8606a8873e0b48b24e2c014bf47f3f"
+          },
+          {
+            "kind": "event",
+            "note": "risk.classified",
+            "ref": "seq:48",
+            "sha256": "abeb0b58909e4cf2015bdb60326151e5cff9290b196da39e5f625308b5d42309"
+          },
+          {
+            "kind": "event",
+            "note": "policy.decision",
+            "ref": "seq:49",
+            "sha256": "6e3dc417194bc32f9ed9ddb86f3efc04792f3ca003f4ece01ffc9f38c5fdd3ee"
+          },
+          {
+            "kind": "event",
+            "note": "human.approval_requested",
+            "ref": "seq:50",
+            "sha256": "5d90ef352789e1d47c905360dc31e65b5e774a9d0073524a88c963e5ae30723e"
+          },
+          {
+            "kind": "event",
+            "note": "run.transitioned",
+            "ref": "seq:51",
+            "sha256": "00dd609ce97f2593c0e54b4c150d56bb5ad111ba4277d4b983bb8d621627e741"
+          },
+          {
+            "kind": "event",
+            "note": "human.approval",
+            "ref": "seq:52",
+            "sha256": "100a8ed63130c834aeec629c1fd6f41b88bad2373bd2405a489306f40a7d6fd5"
+          },
+          {
+            "kind": "event",
+            "note": "run.transitioned",
+            "ref": "seq:53",
+            "sha256": "9cf9fa10c867caa7f092f1b030404d8e5531fe9ff3f4366d238578a46c049b39"
+          },
+          {
+            "kind": "event",
+            "note": "runtime.attached",
+            "ref": "seq:54",
+            "sha256": "baecaafcd3fe2d06e7f0c954f3effe109ce4ba8e2581a9b7c2310123a9892505"
+          },
+          {
+            "kind": "event",
+            "note": "policy.decision",
+            "ref": "seq:55",
+            "sha256": "5d6b1eedc17435d2ff5bf61b7453955bf18da2e5531ea76db05ed9ca4c0af54a"
+          },
+          {
+            "kind": "event",
+            "note": "model.selected",
+            "ref": "seq:56",
+            "sha256": "041a3f93bd82993dd726555c5e6cd4b738bb7cf3236239956ef2cccf8451364e"
+          },
+          {
+            "kind": "event",
+            "note": "policy.decision",
+            "ref": "seq:57",
+            "sha256": "87de49edb185ff2f0c3adb38be2f4733b4ab6c43e2321901948230c090bdbab7"
+          },
+          {
+            "kind": "event",
+            "note": "model.input_header_revised",
+            "ref": "seq:58",
+            "sha256": "f5392cd72021eac258b7a833b8c5889e7171f4fc5dbd1c9534964f9283fbb41d"
+          },
+          {
+            "kind": "event",
+            "note": "model.input_surface_updated",
+            "ref": "seq:59",
+            "sha256": "f5bb2f83eafe784b963998b25cb783fd8a44151184c64058a2bc322b0f623696"
+          },
+          {
+            "kind": "event",
+            "note": "model.request_recorded",
+            "ref": "seq:60",
+            "sha256": "a88eafb161b300b01adcc37632ce514cf8d31f614f4c86bd099c60c5a5a91f44"
+          },
+          {
+            "kind": "event",
+            "note": "model.response_chunk",
+            "ref": "seq:61",
+            "sha256": "537975ae1231503ddb78db1556ec262065ef8e0f16a9885b2c667b90b10d9ec9"
+          },
+          {
+            "kind": "event",
+            "note": "policy.decision",
+            "ref": "seq:62",
+            "sha256": "9be660067efbdcb568f1b562bbdc975b46ea28db31fd956847cea70c6ef3c42e"
+          },
+          {
+            "kind": "event",
+            "note": "human.approval_requested",
+            "ref": "seq:63",
+            "sha256": "98f11b96b2d405b4bc353ac1707fcb9356382f638faaed5143af9ac513176924"
+          },
+          {
+            "kind": "event",
+            "note": "artifact.created",
+            "ref": "seq:64",
+            "sha256": "abf73d7268dfd83368b7dff205bdbba18da4ac604515e6e0134b56a1baee47f0"
+          },
+          {
+            "kind": "event",
+            "note": "artifact.created",
+            "ref": "seq:65",
+            "sha256": "250c52325e886253698cbe6efb074543e5b38fe89bc1ef2a3cb5c74bc97fa352"
+          },
+          {
+            "kind": "event",
+            "note": "run.transitioned",
+            "ref": "seq:66",
+            "sha256": "676cc7329a05b455acd6f363feb23568ec1adbc712bf30093b243e3214e6f8d3"
+          },
+          {
+            "kind": "event",
+            "note": "human.approval",
+            "ref": "seq:67",
+            "sha256": "65948338b708f1adf3e6045fd5a11de9e7dbc998c3471884fe8be5bd9e6e612d"
+          },
+          {
+            "kind": "event",
+            "note": "run.transitioned",
+            "ref": "seq:68",
+            "sha256": "3d84c28437f13efeb1c3e6d964084c5f1d03591c8c5157056aeae5ef95a23259"
+          },
+          {
+            "kind": "event",
+            "note": "runtime.attached",
+            "ref": "seq:69",
+            "sha256": "4161055280b52b455e96250b6feb38857df91383e5beeddc5cb3e4a8716d5be9"
+          },
+          {
+            "kind": "event",
+            "note": "run.transitioned",
+            "ref": "seq:70",
+            "sha256": "98da5fe9a3edab092f6ff44ef481966110a724d4d8ca65b97b0922fafd80669b"
+          },
+          {
+            "kind": "event",
+            "note": "agent.message",
+            "ref": "seq:71",
+            "sha256": "0eb1292747239789dd4c30d3cf0715ecef68abd9c55fea51a30f1ac7658001a9"
+          },
+          {
+            "kind": "event",
+            "note": "agent.started",
+            "ref": "seq:72",
+            "sha256": "19414ca766df7d6d0441fd410e038b6c6bbcfb48f25376e5d25484c3be961b12"
+          },
+          {
+            "kind": "event",
+            "note": "policy.decision",
+            "ref": "seq:73",
+            "sha256": "45f6f33e6bb2f4745c1dbf33bd125152b2f377342eeae1dad4642cb618f79d9b"
+          },
+          {
+            "kind": "event",
+            "note": "model.selected",
+            "ref": "seq:74",
+            "sha256": "bc4d52a67e58eb972234e0bedec4e81b9fa51160bf0c3c0a30179daec12527fe"
+          },
+          {
+            "kind": "event",
+            "note": "policy.decision",
+            "ref": "seq:75",
+            "sha256": "c0e937c163add99e9773016a18b2b5cf81739d5b4217ab38653db82e27481898"
+          },
+          {
+            "kind": "event",
+            "note": "model.input_header_revised",
+            "ref": "seq:76",
+            "sha256": "71f4d27140a7d2d52b32ad1f25b25e09d3f63c9ad06e3e3aac19f437e8409843"
+          },
+          {
+            "kind": "event",
+            "note": "model.input_surface_updated",
+            "ref": "seq:77",
+            "sha256": "12cc6c6eba6e214b9e64203283f852967f101dca75770a843fae7d150953acfe"
+          },
+          {
+            "kind": "event",
+            "note": "model.request_recorded",
+            "ref": "seq:78",
+            "sha256": "2b4f26e67f384a4ccb6999178ed809c0527001f3e96858243679b8541e33f86b"
+          },
+          {
+            "kind": "event",
+            "note": "model.response_chunk",
+            "ref": "seq:79",
+            "sha256": "4f2f5003670442e6455eeae7353fc9a5b47ab5a927f94972b7ebdca4f48f4997"
+          },
+          {
+            "kind": "event",
+            "note": "policy.decision",
+            "ref": "seq:80",
+            "sha256": "a1d220f3563f24d06788df5a88c4a7ad05acb1e10f99f250c01a472d75061d64"
+          },
+          {
+            "kind": "event",
+            "note": "policy.decision",
+            "ref": "seq:81",
+            "sha256": "21d775eaa2934585a535d53da815448bb0176adccbeab0858550ca30f42605ca"
+          },
+          {
+            "kind": "event",
+            "note": "tool.started",
+            "ref": "seq:82",
+            "sha256": "3f0c0852e080917f910cfd2ec21cdba634895a550095c9208b57a38a14f29928"
+          },
+          {
+            "kind": "event",
+            "note": "artifact.created",
+            "ref": "seq:83",
+            "sha256": "e94ad97373195301f9b0394c8b932c07521dd5afe4e656c9566b2d5d02b2256f"
+          },
+          {
+            "kind": "event",
+            "note": "artifact.created",
+            "ref": "seq:84",
+            "sha256": "5655431848b9375c0f44e82344855423dac9fc2e7a9419ca1a6ddc2917784428"
+          },
+          {
+            "kind": "event",
+            "note": "artifact.created",
+            "ref": "seq:85",
+            "sha256": "2293b23f50cfc1301d151f13f28ad1c7df28806f5ac06acc5698cedefe8c5e32"
+          },
+          {
+            "kind": "event",
+            "note": "tool.completed",
+            "ref": "seq:86",
+            "sha256": "e77b63e63803397e85d9c5ed8e9791f31707a6044ec0113dfe4b5a4529563be4"
+          },
+          {
+            "kind": "event",
+            "note": "policy.decision",
+            "ref": "seq:87",
+            "sha256": "43cdf7d43d8d19aa7a6888c3980b27828f8ffdebbd978353cc505ab4451bc5d7"
+          },
+          {
+            "kind": "event",
+            "note": "model.selected",
+            "ref": "seq:88",
+            "sha256": "92726c454f57b53db8cdd280673840e59e257306f9b7e8adc2b51652908cd9b7"
+          },
+          {
+            "kind": "event",
+            "note": "policy.decision",
+            "ref": "seq:89",
+            "sha256": "a3f3788b319fc8edef78e9e3d75c97b67134217cc2047d70505226e6cd796268"
+          },
+          {
+            "kind": "event",
+            "note": "model.input_surface_updated",
+            "ref": "seq:90",
+            "sha256": "d6abf9d740d5434ac6148108f3ff7ab95eeede703baedf22ab43073eebbb0e3f"
+          },
+          {
+            "kind": "event",
+            "note": "model.request_recorded",
+            "ref": "seq:91",
+            "sha256": "9c336a4a4951624801b3c47eb14f7b999bf981f4abcbace090d7167a356303e8"
+          },
+          {
+            "kind": "event",
+            "note": "model.response_chunk",
+            "ref": "seq:92",
+            "sha256": "3049f77310ec4082d5ccd40aac4b5ba73a616991ce7776ad8ba40c6441da076d"
+          },
+          {
+            "kind": "event",
+            "note": "agent.completed",
+            "ref": "seq:93",
+            "sha256": "89df744b108ffd987082bc1e00b34ad080883cd4b81ea30804e67c4104d7a705"
+          },
+          {
+            "kind": "event",
+            "note": "subagent.settled",
+            "ref": "seq:94",
+            "sha256": "ad6151953a78bf6707a122df62b59410b9f7eeee945046a4eb9f2ea5b217fd9c"
+          },
+          {
+            "kind": "event",
+            "note": "agent.message",
+            "ref": "seq:95",
+            "sha256": "28348ae983c4ee735782065fa3652ece7a5d358fdc19105e1b146209be7d8fdc"
+          },
+          {
+            "kind": "event",
+            "note": "artifact.created",
+            "ref": "seq:96",
+            "sha256": "98fc1dd3f6a6475ca25c48ce5f805035787d60fdcb1485cabfbaf0ee2b69ab27"
+          },
+          {
+            "kind": "event",
+            "note": "agent.message",
+            "ref": "seq:97",
+            "sha256": "d28ac39675520e5ab90507415219a538af70a731ac6a412d8cc6f009d9b9bb3e"
+          },
+          {
+            "kind": "event",
+            "note": "run.transitioned",
+            "ref": "seq:98",
+            "sha256": "9869a8da3d4a3f88e92a1d7b9b295a0d509d889c773fc61eb3111e0647f5a38b"
+          }
+        ],
+        "failure_code": null,
+        "severity": "MEDIUM",
+        "status": "PASSED",
+        "title": "Preflight control METHODOLOGY-EVIDENCE-001"
+      }
+    ],
+    "findings": [
+      {
+        "agent_id": "agent_6bafb70f59634feb9c0165844dd38dbb",
+        "confidence": 0.8,
+        "control_id": "model:CREDIT-PROTECTED-ATTRIBUTE",
+        "created_at": "2026-10-13T16:08:39.009066Z",
+        "evidence": [],
+        "finding": "The dataset contains sensitive attributes such as age and personal status (sex), which are used in the analysis. There is a risk that these sensitive attributes may affect the fairness of the lending decisions. \"Activities or data inputs involving special categories of personal data are prohibited\" (Directive (EU) 2023/2225, Article 18(3)-(4)).",
+        "framework": "CREDIT_RISK",
+        "id": "finding_c34f3517888542b6b87c2152581e841a",
+        "recommendation": "Review the dataset to ensure that sensitive attributes are either justified for inclusion or excluded from model features.",
+        "run_id": "run_18d9a9bb215b4a7d82d66aa2107983a6",
+        "severity": "HIGH",
+        "title": "Handling of Sensitive Attributes"
+      },
+      {
+        "agent_id": "agent_6bafb70f59634feb9c0165844dd38dbb",
+        "confidence": 0.7,
+        "control_id": "model:CREDIT-ADVERSE-ACTION",
+        "created_at": "2026-10-13T16:08:39.009494Z",
+        "evidence": [],
+        "finding": "The evidence does not clearly indicate whether consumers can obtain a comprehensible explanation of the creditworthiness assessment, express a viewpoint, or request a human review, as required by Directive (EU) 2023/2225, Article 18(8)-(9).",
+        "framework": "CREDIT_RISK",
+        "id": "finding_b6a874f03da94fabbe9a28206f78802b",
+        "recommendation": "Establish procedures ensuring that consumers are informed about their rights and have access to explanations of their creditworthiness assessments.",
+        "run_id": "run_18d9a9bb215b4a7d82d66aa2107983a6",
+        "severity": "HIGH",
+        "title": "Automated Assessment Explainability Rights"
+      },
+      {
+        "agent_id": "agent_6bafb70f59634feb9c0165844dd38dbb",
+        "confidence": 0.6,
+        "control_id": "model:CREDIT-SUBGROUP-DISPARITY",
+        "created_at": "2026-10-13T16:08:39.009829Z",
+        "evidence": [
+          {
+            "kind": "event",
+            "note": null,
+            "ref": "seq:28",
+            "sha256": null
+          }
+        ],
+        "finding": "There is no evidence presented to assess whether performance or selection rates diverge across groups defined by sensitive attributes. Consequently, subgroup disparity cannot be ruled out based on the provided information.",
+        "framework": "CREDIT_RISK",
+        "id": "finding_a6131f8a4a094a9fa26ee09b114ab390",
+        "recommendation": "Implement systematic monitoring to evaluate performance and selection rates across different demographic groups to ensure no significant disparities exist.",
+        "run_id": "run_18d9a9bb215b4a7d82d66aa2107983a6",
+        "severity": "MEDIUM",
+        "title": "Potential Subgroup Disparity"
+      },
+      {
+        "agent_id": "agent_5021c649505d45a9a1d0e29efc812965",
+        "confidence": 0.7,
+        "control_id": "model:EU-AI-ACT-ART-12",
+        "created_at": "2026-10-13T16:08:59.080581Z",
+        "evidence": [
+          {
+            "kind": "event",
+            "note": null,
+            "ref": "seq:28",
+            "sha256": null
+          }
+        ],
+        "finding": "The events logged in the audit report do not provide a comprehensive traceable record that aligns with the purpose of the activity as required by Article 12. Although there are recorded events indicating actions taken, the overall integrity and completeness of the log is uncertain. Event sequence 28 indicates the recording of the activity profile, but further details regarding the completeness of actions and decisions are needed.",
+        "framework": "EU_AI_ACT",
+        "id": "finding_c77e6c1eb8924b35ba51ed49947cb050",
+        "recommendation": "Enhance the logging mechanism to ensure all relevant actions and decisions are documented in a traceable manner aligned with the activity's purpose.",
+        "run_id": "run_18d9a9bb215b4a7d82d66aa2107983a6",
+        "severity": "HIGH",
+        "title": "Insufficient record-keeping regarding activity's purpose"
+      },
+      {
+        "agent_id": "agent_5021c649505d45a9a1d0e29efc812965",
+        "confidence": 0.6,
+        "control_id": "model:EU-AI-ACT-ART-14",
+        "created_at": "2026-10-13T16:08:59.081031Z",
+        "evidence": [],
+        "finding": "While the activity profile states that a Lead Data Scientist and Credit Risk Manager may intervene, the evidence does not clearly show the ability of these individuals to effectively override, intervene in, or stop the automated processes at critical decision points. The oversight structure requires further clarity to demonstrate compliance with Article 14.",
+        "framework": "EU_AI_ACT",
+        "id": "finding_28337ce9e33c4463a6472ab3e6307234",
+        "recommendation": "Clearly document the specific mechanisms and processes that allow for human intervention.",
+        "run_id": "run_18d9a9bb215b4a7d82d66aa2107983a6",
+        "severity": "MEDIUM",
+        "title": "Unclear human oversight capabilities"
+      },
+      {
+        "agent_id": "agent_5021c649505d45a9a1d0e29efc812965",
+        "confidence": 0.8,
+        "control_id": "model:EU-AI-ACT-ART-11",
+        "created_at": "2026-10-13T16:08:59.081373Z",
+        "evidence": [],
+        "finding": "The output does not contain sufficient technical documentation that meets the requirements outlined in Article 11 of the EU AI Act. There is no mention of the design, capabilities, limitations, or monitoring of the system being documented and kept up to date. This is necessary for compliance and assessment.",
+        "framework": "EU_AI_ACT",
+        "id": "finding_764aeb1e453a4fe3b421638ecb6a437e",
+        "recommendation": "Develop and maintain comprehensive technical documentation as per the requirements specified in Article 11.",
+        "run_id": "run_18d9a9bb215b4a7d82d66aa2107983a6",
+        "severity": "HIGH",
+        "title": "Insufficient evidence of technical documentation"
+      },
+      {
+        "agent_id": "agent_32bef59105aa4b809afaffc00fc7ee09",
+        "confidence": 0.9,
+        "control_id": "model:CREDIT-PROTECTED-ATTRIBUTE",
+        "created_at": "2026-10-13T16:09:15.582833Z",
+        "evidence": [],
+        "finding": "The dataset contains sensitive attributes such as age and personal status (sex), which are used in the analysis. There ...",
+        "framework": "CREDIT_RISK",
+        "id": "finding_1d70840fb4c843f09e43f68180802c9b",
+        "recommendation": "Ensure that sensitive attributes are not included as model features or assess the potential impact of their use.",
+        "run_id": "run_18d9a9bb215b4a7d82d66aa2107983a6",
+        "severity": "HIGH",
+        "title": "Use of Sensitive Attributes in Dataset"
+      },
+      {
+        "agent_id": "agent_32bef59105aa4b809afaffc00fc7ee09",
+        "confidence": 0.85,
+        "control_id": "model:CREDIT-ADVERSE-ACTION",
+        "created_at": "2026-10-13T16:09:15.583237Z",
+        "evidence": [],
+        "finding": "The evidence does not clearly indicate whether consumers can obtain a comprehensible explanation of the creditworthiness assessment including its logic, risks, significance and effects.",
+        "framework": "CREDIT_RISK",
+        "id": "finding_9ee86a7275324fc69bf74fda59be535e",
+        "recommendation": "Implement a mechanism for clear and comprehensible explanations of automated creditworthiness assessments to consumers.",
+        "run_id": "run_18d9a9bb215b4a7d82d66aa2107983a6",
+        "severity": "HIGH",
+        "title": "Lack of Clear Explanation for Automated Processing"
+      },
+      {
+        "agent_id": "agent_32bef59105aa4b809afaffc00fc7ee09",
+        "confidence": 0.75,
+        "control_id": "model:CREDIT-SUBGROUP-DISPARITY",
+        "created_at": "2026-10-13T16:09:15.583578Z",
+        "evidence": [
+          {
+            "kind": "event",
+            "note": null,
+            "ref": "seq:80",
+            "sha256": null
+          }
+        ],
+        "finding": "There is no evidence presented to assess whether performance or selection rates diverge across groups defined by sensitive attributes.",
+        "framework": "CREDIT_RISK",
+        "id": "finding_90afe8c483434a7aa830cd7476454d8d",
+        "recommendation": "Analyze subgroup performance or selection rates across protected attributes to ensure there are no disparities.",
+        "run_id": "run_18d9a9bb215b4a7d82d66aa2107983a6",
+        "severity": "MEDIUM",
+        "title": "Incomplete Evidence for Group Disparity Assessment"
+      },
+      {
+        "agent_id": "agent_d8145b7fa5a34df7b69d4aaa0ae7c3b8",
+        "confidence": 0.9,
+        "control_id": "model:EU-AI-ACT-ART-12",
+        "created_at": "2026-10-13T16:09:27.235349Z",
+        "evidence": [
+          {
+            "kind": "event",
+            "note": null,
+            "ref": "seq:28",
+            "sha256": null
+          }
+        ],
+        "finding": "The events logged in the audit report do not provide a comprehensive traceable record that aligns with the purpose of the system, as required by Article 12 of the EU AI Act.",
+        "framework": "EU_AI_ACT",
+        "id": "finding_54389eec66884b0090ea5ad44e92f65e",
+        "recommendation": "Enhance the logging system to ensure it captures all relevant events in a manner that meets the traceability requirements outlined in Article 12.",
+        "run_id": "run_18d9a9bb215b4a7d82d66aa2107983a6",
+        "severity": "HIGH",
+        "title": "Inadequate traceable record for auditing purposes"
+      },
+      {
+        "agent_id": "agent_d8145b7fa5a34df7b69d4aaa0ae7c3b8",
+        "confidence": 0.8,
+        "control_id": "model:EU-AI-ACT-ART-14",
+        "created_at": "2026-10-13T16:09:27.235779Z",
+        "evidence": [
+          {
+            "kind": "event",
+            "note": null,
+            "ref": "seq:52",
+            "sha256": null
+          }
+        ],
+        "finding": "The activity profile states that a Lead Data Scientist and Credit Risk Manager may intervene, but the evidence does not clearly demonstrate their effective oversight of the operational activities or the ability to intervene as necessary, as required by Article 14 of the EU AI Act.",
+        "framework": "EU_AI_ACT",
+        "id": "finding_943f699a543e4890849690feb3ca19fd",
+        "recommendation": "Clarify and document the specific oversight measures that allow for intervention and stopping of the operational activities.",
+        "run_id": "run_18d9a9bb215b4a7d82d66aa2107983a6",
+        "severity": "MEDIUM",
+        "title": "Unclear human oversight capabilities"
+      },
+      {
+        "agent_id": "agent_d8145b7fa5a34df7b69d4aaa0ae7c3b8",
+        "confidence": 0.9,
+        "control_id": "model:EU-AI-ACT-ART-11",
+        "created_at": "2026-10-13T16:09:27.236145Z",
+        "evidence": [
+          {
+            "kind": "artifact",
+            "note": null,
+            "ref": "datasets/german_credit.schema.json",
+            "sha256": null
+          }
+        ],
+        "finding": "The produced artifacts and documentation do not sufficiently cover the system's design, capabilities, limitations, and monitoring as required by Article 11 of the EU AI Act.",
+        "framework": "EU_AI_ACT",
+        "id": "finding_2d2d88b8081a4ce6a13b23146036061c",
+        "recommendation": "Prepare and maintain comprehensive technical documentation that fulfills the requirements specified in Article 11 and Annex IV, ensuring it is up-to-date.",
+        "run_id": "run_18d9a9bb215b4a7d82d66aa2107983a6",
+        "severity": "HIGH",
+        "title": "Insufficient technical documentation"
+      },
+      {
+        "agent_id": "agent_7fe2855c25134e7195963e115d882d2e",
+        "confidence": 0.9,
+        "control_id": "model:CREDIT-PROTECTED-ATTRIBUTE",
+        "created_at": "2026-10-13T16:09:48.539857Z",
+        "evidence": [
+          {
+            "kind": "event",
+            "note": null,
+            "ref": "seq:28",
+            "sha256": null
+          }
+        ],
+        "finding": "The dataset includes sensitive attributes such as age and personal status (sex) that are used in the analysis, potentially violating the prohibition against using special categories of personal data.",
+        "framework": "CREDIT_RISK",
+        "id": "finding_b997dd6f2d4746d7a0c24db92c350183",
+        "recommendation": "Review the use of sensitive attributes in the dataset and ensure compliance with data protection regulations.",
+        "run_id": "run_18d9a9bb215b4a7d82d66aa2107983a6",
+        "severity": "HIGH",
+        "title": "Use of Sensitive Attributes in Analysis"
+      },
+      {
+        "agent_id": "agent_7fe2855c25134e7195963e115d882d2e",
+        "confidence": 0.85,
+        "control_id": "model:CREDIT-ADVERSE-ACTION",
+        "created_at": "2026-10-13T16:09:48.540239Z",
+        "evidence": [
+          {
+            "kind": "event",
+            "note": null,
+            "ref": "seq:28",
+            "sha256": null
+          }
+        ],
+        "finding": "The evidence does not clearly indicate whether consumers can obtain a comprehensible explanation of the creditworthiness assessments or if they have the right to contest an automated decision.",
+        "framework": "CREDIT_RISK",
+        "id": "finding_bf041b251c424920beaf9c2078849d3e",
+        "recommendation": "Implement procedures to ensure consumers receive explanations for automated decisions and the right to contest those decisions.",
+        "run_id": "run_18d9a9bb215b4a7d82d66aa2107983a6",
+        "severity": "HIGH",
+        "title": "Lack of Automated Assessment Explainability"
+      },
+      {
+        "agent_id": "agent_7fe2855c25134e7195963e115d882d2e",
+        "confidence": 0.75,
+        "control_id": "model:CREDIT-SUBGROUP-DISPARITY",
+        "created_at": "2026-10-13T16:09:48.540573Z",
+        "evidence": [
+          {
+            "kind": "event",
+            "note": null,
+            "ref": "seq:28",
+            "sha256": null
+          }
+        ],
+        "finding": "There is no evidence presented to assess whether performance or selection rates diverge across groups defined by sensitive attributes such as age or personal status (sex).",
+        "framework": "CREDIT_RISK",
+        "id": "finding_26655e0c7d3a4afbbc2e16a0c49fbb3a",
+        "recommendation": "Conduct a thorough examination of performance metrics across different demographic groups to identify and address any disparities.",
+        "run_id": "run_18d9a9bb215b4a7d82d66aa2107983a6",
+        "severity": "MEDIUM",
+        "title": "Unassessed Group Performance Disparity"
+      },
+      {
+        "agent_id": "agent_79ad083800d14102aac6e2a4669e20d7",
+        "confidence": 0.8,
+        "control_id": "model:EU-AI-ACT-ART-12",
+        "created_at": "2026-10-13T16:10:08.421423Z",
+        "evidence": [
+          {
+            "kind": "event",
+            "note": null,
+            "ref": "seq:28",
+            "sha256": null
+          },
+          {
+            "kind": "event",
+            "note": null,
+            "ref": "seq:86",
+            "sha256": null
+          }
+        ],
+        "finding": "The events logged in the audit report do not provide a comprehensive traceable record that aligns with the purpose of the activity, specifically for assessing the historical dataset. The evidence states, \"The events logged in the audit report do not provide a comprehensive traceable record that aligns with the purpose of the activity.\"",
+        "framework": "EU_AI_ACT",
+        "id": "finding_04f73c3b8bd4453c8d71780aad94e14c",
+        "recommendation": null,
+        "run_id": "run_18d9a9bb215b4a7d82d66aa2107983a6",
+        "severity": "HIGH",
+        "title": "Incomplete and Non-Comprehensive Logs"
+      },
+      {
+        "agent_id": "agent_79ad083800d14102aac6e2a4669e20d7",
+        "confidence": 0.7,
+        "control_id": "model:EU-AI-ACT-ART-14",
+        "created_at": "2026-10-13T16:10:08.421760Z",
+        "evidence": [],
+        "finding": "The activity profile indicates that a Lead Data Scientist and Credit Risk Manager may intervene, but the evidence does not demonstrate the actual capability for intervention or decision-making regarding the ongoing activity or its outputs. The profile states that oversight is limited to review before downstream feature engineering or model use.",
+        "framework": "EU_AI_ACT",
+        "id": "finding_fb81a767b8c34fd299021a93466aab58",
+        "recommendation": null,
+        "run_id": "run_18d9a9bb215b4a7d82d66aa2107983a6",
+        "severity": "MEDIUM",
+        "title": "Insufficient Evidence of Effective Human Oversight"
+      },
+      {
+        "agent_id": "agent_79ad083800d14102aac6e2a4669e20d7",
+        "confidence": 0.8,
+        "control_id": "model:EU-AI-ACT-ART-11",
+        "created_at": "2026-10-13T16:10:08.422024Z",
+        "evidence": [],
+        "finding": "The produced artifacts and documentation do not adequately cover the system’s design, capabilities, limitations, and monitoring as required for high-risk AI systems. Previous findings noted, \"The output does not contain sufficient technical documentation that meets the requirements outlined in Article 11.\"",
+        "framework": "EU_AI_ACT",
+        "id": "finding_c26aed118b4d4ec58e01436c94b3a638",
+        "recommendation": null,
+        "run_id": "run_18d9a9bb215b4a7d82d66aa2107983a6",
+        "severity": "HIGH",
+        "title": "Lack of Sufficient Technical Documentation"
+      },
+      {
+        "agent_id": "agent_6563dcff8af54405b62f814f591928e4",
+        "confidence": 0.8,
+        "control_id": "model:CREDIT-PROTECTED-ATTRIBUTE",
+        "created_at": "2026-10-13T16:10:30.069064Z",
+        "evidence": [],
+        "finding": "The dataset includes sensitive attributes such as age and personal status (sex) that are used in the analysis. The audit indicates that the handling may conflict with GDPR requirements since these are treated as sensitive data that should not be included in the assessment according to Directive (EU) 2023/2225, Article 18(3)-(4).",
+        "framework": "CREDIT_RISK",
+        "id": "finding_e5c4c5917cad4b19b4dc20df3d5cdac5",
+        "recommendation": "Ensure that sensitive attributes are excluded from the data analysis for creditworthiness assessment.",
+        "run_id": "run_18d9a9bb215b4a7d82d66aa2107983a6",
+        "severity": "HIGH",
+        "title": "Use of Sensitive Attributes in Analysis"
+      },
+      {
+        "agent_id": "agent_6563dcff8af54405b62f814f591928e4",
+        "confidence": 0.8,
+        "control_id": "model:CREDIT-ADVERSE-ACTION",
+        "created_at": "2026-10-13T16:10:30.069518Z",
+        "evidence": [],
+        "finding": "The evidence does not clearly indicate that consumers can obtain a comprehensible explanation of the creditworthiness assessment process, including its logic and risks. Users must be able to express their viewpoint, review the decision, and contest the automated processing as stipulated in Directive (EU) 2023/2225, Article 18(8)-(9).",
+        "framework": "CREDIT_RISK",
+        "id": "finding_c8b892d155424d3cb3987b7a343e359d",
+        "recommendation": "Implement mechanisms to ensure that consumers receive a clear explanation of automated credit decisions and provide means for contesting these decisions.",
+        "run_id": "run_18d9a9bb215b4a7d82d66aa2107983a6",
+        "severity": "HIGH",
+        "title": "Lack of Clear Explanation and Review Rights"
+      },
+      {
+        "agent_id": "agent_6563dcff8af54405b62f814f591928e4",
+        "confidence": 0.7,
+        "control_id": "model:CREDIT-SUBGROUP-DISPARITY",
+        "created_at": "2026-10-13T16:10:30.069896Z",
+        "evidence": [
+          {
+            "kind": "event",
+            "note": null,
+            "ref": "seq:80",
+            "sha256": null
+          }
+        ],
+        "finding": "There is no evidence presented to assess whether performance or selection rates diverge across groups defined by sensitive attributes (age, personal status). This absence prevents ruling out potential disparities in credit decisions based on these characteristics.",
+        "framework": "CREDIT_RISK",
+        "id": "finding_fd4960edb6c24aacab575f49c4e74165",
+        "recommendation": "Conduct an analysis that specifically evaluates performance and selection rates across different demographic groups to identify any disparities.",
+        "run_id": "run_18d9a9bb215b4a7d82d66aa2107983a6",
+        "severity": "MEDIUM",
+        "title": "Lack of Evidence on Selection Rate Disparities"
+      },
+      {
+        "agent_id": "agent_c35cfa17532a45b4a49b6fcd9ebba2a0",
+        "confidence": 0.8,
+        "control_id": "model:EU-AI-ACT-ART-12",
+        "created_at": "2026-10-13T16:10:42.549844Z",
+        "evidence": [
+          {
+            "kind": "event",
+            "note": null,
+            "ref": "seq:28",
+            "sha256": null
+          },
+          {
+            "kind": "event",
+            "note": null,
+            "ref": "seq:80",
+            "sha256": null
+          }
+        ],
+        "finding": "The events logged in the audit report do not provide a comprehensive traceable record that aligns with the purpose of the activity; hence it fails to meet the record-keeping requirements of Article 12. Relevant logged events do not demonstrate a complete history of actions taken during the run.",
+        "framework": "EU_AI_ACT",
+        "id": "finding_78be4547e82d43fdbb19cefd1bdd22a2",
+        "recommendation": "Improve logging practices to ensure a comprehensive record of all actions and events for compliance with record-keeping requirements.",
+        "run_id": "run_18d9a9bb215b4a7d82d66aa2107983a6",
+        "severity": "HIGH",
+        "title": "Insufficient Event Logging for Compliance"
+      },
+      {
+        "agent_id": "agent_c35cfa17532a45b4a49b6fcd9ebba2a0",
+        "confidence": 0.7,
+        "control_id": "model:EU-AI-ACT-ART-14",
+        "created_at": "2026-10-13T16:10:42.550298Z",
+        "evidence": [],
+        "finding": "The activity profile indicates that human oversight is possible by a Lead Data Scientist and Credit Risk Manager, however, there is insufficient evidence to confirm whether the human oversight measures are being effectively applied or if interventions were made during the run.",
+        "framework": "EU_AI_ACT",
+        "id": "finding_762a488231e9410fae8e00b9029115cf",
+        "recommendation": "Enhance documentation to capture instances of human oversight interventions in future runs.",
+        "run_id": "run_18d9a9bb215b4a7d82d66aa2107983a6",
+        "severity": "MEDIUM",
+        "title": "Lack of Effective Human Oversight Evidence"
+      },
+      {
+        "agent_id": "agent_c35cfa17532a45b4a49b6fcd9ebba2a0",
+        "confidence": 0.75,
+        "control_id": "model:EU-AI-ACT-ART-11",
+        "created_at": "2026-10-13T16:10:42.550660Z",
+        "evidence": [
+          {
+            "kind": "artifact",
+            "note": null,
+            "ref": "analysis.md",
+            "sha256": null
+          }
+        ],
+        "finding": "The produced artifacts and documentation do not adequately cover the system's design, capabilities, limitations, and performance monitoring as required under Article 11 of the AI Act. The existing documentation fails to provide sufficient detail for assessment.",
+        "framework": "EU_AI_ACT",
+        "id": "finding_ed5abf76b89d42d0aa4acca2bc66fe47",
+        "recommendation": "Expand technical documentation to include a comprehensive overview of the system's design, capabilities, limitations, and monitoring.",
+        "run_id": "run_18d9a9bb215b4a7d82d66aa2107983a6",
+        "severity": "HIGH",
+        "title": "Inadequate Technical Documentation"
+      }
+    ],
+    "graph_definition_hash": "5fbd1dfb4c4e6b4c4f7ae894b9c60ed103a698018cda000aacbdbc6ec5dd719b",
+    "manifest_sha256": "5c248aa566da80f2010eebe7b6c7d371c7faa70681f07363a3b162968297c339",
+    "policy_sha256": "4a6edfd56dff865f79ba5a7182093068d143282e2970117e18937861cab50dca",
+    "run_id": "run_18d9a9bb215b4a7d82d66aa2107983a6",
+    "status": "passed_with_warnings",
+    "summary": {
+      "FAILED": 0,
+      "NOT_APPLICABLE": 16,
+      "NOT_EVALUATED": 0,
+      "PASSED": 14
+    },
+    "terminal_hash": "0413e2b90a3d2c680e601b93c8e49289e44d455aa0ad4b9984b4f11e8d69c0e4"
+  },
+  "approved": true,
+  "approval_seq": 587,
+  "automatic": false,
+  "run_status": "COMPLETED"
+}

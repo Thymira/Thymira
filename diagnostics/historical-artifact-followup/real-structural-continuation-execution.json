@@ -1,0 +1,85 @@
+{
+  "run_id": "run_18d9a9bb215b4a7d82d66aa2107983a6",
+  "chain_valid": true,
+  "events_observed": 256,
+  "candidate_sha256": "ba9fda917c8e3b495d0eb37f851f4ed7af7b4626922d127f4bf763824253ebf5",
+  "plan_model_selections": 1,
+  "plan_approval_seq": 67,
+  "data_completion_seq": 93,
+  "completion_evidence": {
+    "ignored_tool_call_ids": [],
+    "missing_required_artifacts": [],
+    "plan_task_id": "task1",
+    "repaired_tool_call_ids": [],
+    "unresolved_tool_call_ids": [],
+    "validation_failures": [],
+    "verified_artifact_ids": [
+      "artifact_e74e55a56ab24826956bc49a74daf7df",
+      "artifact_b6c78501fd4745a09782b775af853aeb",
+      "artifact_db081394d6404f0f80efd05b22c3edb8"
+    ]
+  },
+  "artifact_errors": [],
+  "artifacts": [
+    {
+      "id": "artifact_e74e55a56ab24826956bc49a74daf7df",
+      "run_id": "run_18d9a9bb215b4a7d82d66aa2107983a6",
+      "name": "profile/german_credit.json",
+      "kind": "report",
+      "uri": ".batches/da594797e0454bd1/642c5904d757ff973ce360f114831c16.blob",
+      "sha256": "642c5904d757ff973ce360f114831c161f53e99121921bf0d8e49494e604f25d",
+      "size_bytes": 9668,
+      "media_type": "application/json",
+      "produced_by": "agent_ee627f3e72d04886b57dc7f4e72c8999",
+      "created_at": "2026-10-13T16:08:15.192558Z",
+      "input_artifact_ids": [
+        "artifact_3753f206569d4094bb7285395574d0b8"
+      ],
+      "execution_key": null,
+      "valid": true,
+      "invalidated_reason": null,
+      "invalidated_at": null
+    },
+    {
+      "id": "artifact_b6c78501fd4745a09782b775af853aeb",
+      "run_id": "run_18d9a9bb215b4a7d82d66aa2107983a6",
+      "name": "profile/german_credit-distributions.png",
+      "kind": "plot",
+      "uri": ".batches/da594797e0454bd1/f7c42c7aa6c861d69f07ed607c0d53ac.blob",
+      "sha256": "f7c42c7aa6c861d69f07ed607c0d53ac8f88736559578c245501beb732763014",
+      "size_bytes": 159853,
+      "media_type": "image/png",
+      "produced_by": "agent_ee627f3e72d04886b57dc7f4e72c8999",
+      "created_at": "2026-10-13T16:08:15.192755Z",
+      "input_artifact_ids": [
+        "artifact_e74e55a56ab24826956bc49a74daf7df"
+      ],
+      "execution_key": null,
+      "valid": true,
+      "invalidated_reason": null,
+      "invalidated_at": null
+    },
+    {
+      "id": "artifact_db081394d6404f0f80efd05b22c3edb8",
+      "run_id": "run_18d9a9bb215b4a7d82d66aa2107983a6",
+      "name": "profile/german_credit-correlation.png",
+      "kind": "plot",
+      "uri": ".batches/da594797e0454bd1/1db453932aa3b72c9e1f915751a34ff5.blob",
+      "sha256": "1db453932aa3b72c9e1f915751a34ff533d4f2de5140c02388983e0c8d90c94a",
+      "size_bytes": 52609,
+      "media_type": "image/png",
+      "produced_by": "agent_ee627f3e72d04886b57dc7f4e72c8999",
+      "created_at": "2026-10-13T16:08:15.192817Z",
+      "input_artifact_ids": [
+        "artifact_e74e55a56ab24826956bc49a74daf7df"
+      ],
+      "execution_key": null,
+      "valid": true,
+      "invalidated_reason": null,
+      "invalidated_at": null
+    }
+  ],
+  "full_run_completed": true,
+  "audit_pending": false,
+  "final_evidence": "real-structural-continuation-final.json"
+}

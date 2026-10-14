@@ -1,0 +1,175 @@
+{
+  "root": "C:/Users/carlo/AppData/Local/Temp/thymira-historical-followup-tsntmx1o",
+  "run_id": "run_758b895f368d43b3ac38b705c40b4181",
+  "events": [
+    {
+      "seq": 139,
+      "type": "human.approval",
+      "hash": "b9c3c76d5a72535de6f3f8fa27c4418949425033b2b2ba59362ed7006582fe03",
+      "decision_id": "decision_552a7142cb1740799e7838a789d6d2df"
+    },
+    {
+      "seq": 140,
+      "type": "run.transitioned",
+      "hash": "26273127f18c643a4370527a1c0a110a0bcb8ade4acca1c060b7810e68f3e516",
+      "state": {
+        "condition": "active",
+        "outcome": null,
+        "stage": "planning",
+        "version": 9,
+        "wait_reason": null
+      }
+    },
+    {
+      "seq": 150,
+      "type": "risk.classified",
+      "hash": "3f13b5914174baa1393a2ea15718bcbea053a751b6b90a43098f6f3e195afa0f",
+      "profile_version": 13,
+      "risk_profile": {
+        "activity_category": "data_analysis",
+        "confidence": 0.95,
+        "missing_information": [],
+        "needs_human_review": true,
+        "reviewed_decision_id": null,
+        "risk_factors": [
+          "sensitive_attributes present",
+          "affects_natural_persons",
+          "autonomy of tools",
+          "potential for misleading analysis",
+          "sensitive_attributes"
+        ],
+        "risk_level": "high"
+      }
+    },
+    {
+      "seq": 159,
+      "type": "activity_profile.questioned",
+      "hash": "415e1a0ea540c6f5332bd5a986b399a792de3fca9e1160adf1e2dfa690e9978e",
+      "field": "affected_population",
+      "question": "What is the potential impact on groups outside of the historical German credit applicants represented in the dataset?"
+    },
+    {
+      "seq": 169,
+      "type": "activity_profile.answered",
+      "hash": "235c0146f6673666c442b394e852f9890dbd43d8c3741c6d41df172ac6334d04",
+      "field": "affected_population",
+      "question": "What is the potential impact on groups outside of the historical German credit applicants represented in the dataset?",
+      "answer": "Historical German credit applicants represented by the registered dataset; no live applicant is affected."
+    },
+    {
+      "seq": 189,
+      "type": "activity_profile.answered",
+      "hash": "90129f14cabbcebc04d6637fff63468672f9e60405db2d23098fee392086f827",
+      "field": "affected_population",
+      "question": "What specific groups or demographics outside of historical German credit applicants might experience indirect effects from the analysis of the dataset?",
+      "answer": "Historical German credit applicants represented by the registered dataset; no live applicant is affected."
+    },
+    {
+      "seq": 209,
+      "type": "activity_profile.answered",
+      "hash": "48f73e63883f7bb4fb10a5f06c555db58bbd6be3db49bf6794822ac2c652427b",
+      "field": "affected_population",
+      "question": "Are there any specific socioeconomic or demographic groups in Germany that might be indirectly impacted by the findings derived from the analysis of the dataset?",
+      "answer": "Historical German credit applicants represented by the registered dataset; no live applicant is affected."
+    },
+    {
+      "seq": 210,
+      "type": "activity_profile.recorded",
+      "hash": "00371d1f47e72a693b897a2092b5afb1c555f7a510194babfd3bbcf1d9da0f6c"
+    },
+    {
+      "seq": 221,
+      "type": "risk_assessment.recorded",
+      "hash": "3b8adbd2a919c48eba04034911407db6ae8d53f9bf9f99187924cfb9f0bba194"
+    },
+    {
+      "seq": 224,
+      "type": "policy.decision",
+      "hash": "4e05771f0c630cbc1ea284d96e22814f3d13c135149599136f7c47715ded9d06"
+    },
+    {
+      "seq": 225,
+      "type": "human.approval_requested",
+      "hash": "67333143699f192e8cb540b84f0b748f77c8cfa112ead94cca251f785b63d322",
+      "decision_id": "decision_1c6f63c616704d479e5ede881bbc2af5",
+      "summary": "MIRA could not classify inherent risk with sufficient confidence after one attempt; human review is required."
+    },
+    {
+      "seq": 226,
+      "type": "run.transitioned",
+      "hash": "ea34e12b4a20ddb864b4934628d41cba0a0a4af9fac745f662cf67bf8199f6aa",
+      "state": {
+        "condition": "waiting",
+        "outcome": null,
+        "stage": "planning",
+        "version": 16,
+        "wait_reason": "approval"
+      }
+    },
+    {
+      "seq": 227,
+      "type": "human.approval",
+      "hash": "a0d00c2de9dae15db1bb617652e64652984f0b68b524d7daccf5201614265d59",
+      "decision_id": "decision_1c6f63c616704d479e5ede881bbc2af5"
+    },
+    {
+      "seq": 238,
+      "type": "risk.classified",
+      "hash": "94a84e97cb470e551d00f6c1770f961e614be76e34208c151c44c436ab633faf",
+      "profile_version": 14,
+      "risk_profile": {
+        "activity_category": "data_analysis",
+        "confidence": 0.85,
+        "missing_information": [
+          "affected_population",
+          "decision_effect",
+          "intended_use"
+        ],
+        "needs_human_review": true,
+        "reviewed_decision_id": null,
+        "risk_factors": [
+          "has_sensitive_attributes",
+          "affects_natural_persons",
+          "potential_consequences",
+          "autonomy",
+          "sensitive_attributes"
+        ],
+        "risk_level": "high"
+      }
+    },
+    {
+      "seq": 247,
+      "type": "activity_profile.questioned",
+      "hash": "ffd816910393e95372822c9bdc5b997a6d849c51aa9bdb60250c5b6c67922e88",
+      "field": "decision_effect",
+      "question": "How does the output of this activity inform or change decisions made in future research?"
+    },
+    {
+      "seq": 257,
+      "type": "activity_profile.answered",
+      "hash": "dbced35ef5cef2a4ca4c40658480ff7dd2c789d750d0a1aa5915eb68493e799f",
+      "field": "decision_effect",
+      "question": "How does the output of this activity inform or change decisions made in future research?",
+      "answer": "Outputs inform human research only; no credit approval, denial, pricing or ranking decision is made."
+    },
+    {
+      "seq": 273,
+      "type": "human.approval_requested",
+      "hash": "69d329e84915ff59f5af284abf7c6b6f35c0a2a45af7b6241e7eeed84326dc6f",
+      "decision_id": "decision_78e47ab047f5414ba3e74defdf90b392",
+      "summary": "MIRA could not classify inherent risk with sufficient confidence after one attempt; human review is required."
+    },
+    {
+      "seq": 274,
+      "type": "run.transitioned",
+      "hash": "073f55a0675c99474600547f671ed1e9e4372e7df21fa7b27f5151ef6c63ae3f",
+      "state": {
+        "condition": "waiting",
+        "outcome": null,
+        "stage": "planning",
+        "version": 20,
+        "wait_reason": "approval"
+      }
+    }
+  ]
+}

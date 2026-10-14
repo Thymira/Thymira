@@ -7,7 +7,134 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Session chat now prepares each provider request against the durable six-request / 16,000-token
+  turn balance, estimates the actual local message and structured-schema surface with an explicit
+  margin, and passes a supported output cap to LiteLLM. Citation repair uses a compact prompt with
+  the full draft and selected verified records; durable usage charges inclusive input/output once,
+  preserves cache/reasoning subsets, and reserves the remaining balance when usage is unknown.
+  Remote tokenization and schema serialization can differ from the local estimate.
+- Session chat can iteratively list, read, glob and literally search the bounded virtual tree of
+  project files and same-Session Run evidence. Policy-checked server reads return server-bound path
+  citations without creating a Run or exposing pending results or invalid artifact bytes.
+- Critical agent findings with unknown support can receive an exact, persisted human review only
+  for a complete local descriptive profile audit. Core binds the candidate, evidence, profile,
+  artifact manifest, registered tool capability and Run snapshot to the request, then checks the
+  same binding after approval and reopening. Confirmed findings, custom blocks, training or
+  external effects, stale context and missing audit coverage remain blocked. MIRA reports
+  `incomplete` when a control was not evaluated; the web console presents that status as a warning.
+- MIRA persists a separate, evidence-grounded applicability judgment per agent-authored finding.
+  The verifier sees the exact activity profile and cited Gate approval chain; applicability stays
+  independent of support, severity, finding retention and the Policy Engine/Gate decision. In-flight
+  audits do not treat missing terminal closeout as a gap.
+- Runtime identity is captured at API/worker composition and recorded at Run creation. Inline and
+  lifecycle executions append a LOG_ONLY continuation attachment linked to the original
+  `run.started`; incomplete fingerprint layers remain explicitly unavailable.
+- EDA results include a readable report of verified dataset shape, missingness, work summaries
+  and artifact references; MIRA recomputes linked profile facts independently.
+- Session source-code questions can quote bounded, numbered lines from verified registered
+  source revisions, with event citations and digests, without starting analytical work.
+- Session model follow-ups bind approved prior artifacts by identity and verified lineage. A
+  dedicated evaluator computes requested classifier metrics without implicit retraining, with
+  persisted methodology and content-based delivery checks.
+- Plan normalization follows canonical human model scope: general analysis drops training,
+  tuning and evaluation specialists and rejects dependants. An evaluator-only proposal for
+  explicitly requested new training becomes a tracked experiment without prior model inputs or
+  source-bound evaluation requirements.
+- Session answers render safe Markdown and readable training/evaluation facts. Artifact evidence
+  is selected for the question; citation repair can use a scoped server-recorded terminal
+  diagnostic without publishing unverifiable model text.
+- Session chat distinguishes questions about recorded work from requests for new work, with
+  explicit Auto / Ask about session / Request work modes. Read-only explanations and their
+  evidence references persist across reloads without creating analytical Runs.
+- Blocked/failed conversation turns show bounded diagnostics reconstructed from their closing
+  decision and audit evidence, including referenced tool errors and distinct supported, refuted
+  or unavailable finding verdicts, after navigation or restart. Follow-up context preserves the
+  relevant Run and Task identities without exposing provisional output.
+- A read-only Python runtime status in session chat checks Docker, Linux container mode and the
+  configured image. Unavailable prerequisites fail tool preflight before human approval.
+- Session chat can answer risk questions and request a correction to the facts behind a pending
+  start review. Clarification reclassifies the same Run without approving the old decision.
+- Project Files can edit bounded text files, with revision checks that preserve drafts when
+  another writer changes the file. Hidden, redacted and truncated content remains read-only.
+- Session chat now exposes dataset upload/replacement and inline human review with recorded
+  risk, missing information, tool arguments or findings, and the scope of the user's answer.
+- Session sends reject missing declared datasets before publishing a new Run and preserve the
+  draft for retry after upload. Approval clients bind their answer to the displayed decision.
+- Competing human approval answers are serialized per Run across local processes before
+  execution resumes, preventing contradictory approve/reject events from concurrent requests.
+- Persistent conversation sessions: ordered messages create governed Runs with bounded prior
+  context, durable retry identities, recorded agent responses, and history that can be reopened.
+- An IDE-style web workspace with session navigation, iterative chat, a project
+  explorer, and an inspector retaining Run evidence, artifacts, interview and approval controls.
+
 ### Changed
+- Session file questions select registered PNG plots by their recorded names and ask the model
+  to inspect omitted file locations through the existing bounded read tools before claiming absence.
+  Initial and follow-up requests share glob, literal grep and immediate-child listing guidance;
+  glob requests keep the literal directory in `path` and filename wildcards in `pattern`.
+  A malformed glob with only an empty pattern can receive one charged, read-only correction on
+  the original model route; other invalid shapes and unknown usage remain terminal.
+  Follow-up reads use compact verified evidence and reserve room for a final answer within the
+  existing limits; oversized pages are omitted whole with an explicit explanation of the limit.
+  Simple location questions can return a bounded server-rendered list of positively observed,
+  exactly cited file paths before a model can contradict that read; ambiguous questions remain QA.
+- Provider failures retain only bounded, validated status, code, parameter and request-id
+  diagnostics. Pre-dispatch structured-capability refusals terminate once; returned malformed tool
+  arguments are charged before their existing bounded repair attempt.
+- Saved Python scripts can execute by registered artifact ID. Validation, human approval and
+  sandbox input bind the same source bytes; outputs retain source lineage. Coding and
+  Visualization reuse the ID returned by the write instead of resending the script body.
+- A delegation stops after two preflight syntax failures for identical Python source, including
+  after human-review resumption, while preserving source bytes and its terminal failure reason.
+- Python retry limits now reconstruct syntax and publication failures from task-owned tool events.
+  Identical syntax failures include their destination and structured diagnostic; repeated missing
+  outputs stop after one correction unless a validated missing-output set strictly shrinks.
+  Publication evidence survives approval, a fresh runner and event-log reopen without changing
+  the canonical failure envelope or allowing partial task completion.
+- Dynamic Python manifests now persist their validated logical output declarations as terminal
+  evidence. Task closure and retry progress use those declarations while the manifest remains
+  atomic LOG bookkeeping; unchanged pre-existing files require verified explicit reuse.
+- Structured model retries now carry bounded validation feedback instead of repeating an
+  identical prompt. The planner schema distinguishes exact-file requirements from metrics
+  content requirements and excludes execution-owned provenance and recovery fields.
+- Tool-capable structured-output retries now include the same bounded schema feedback. Mapping
+  keys, returned values and custom validator messages stay out of the repair request.
+- Read-only clarifications no longer enter subsequent work requests. Session review evidence
+  carries the exact later human response, separating resolved reviews from terminal failures.
+- Missing required plots receive one bounded, persisted correction through the existing tool
+  approvals. Exact output paths remain required; chart prompts preserve multiple requested
+  plots and prefer PNG for inline display while retaining SVG export support.
+- Session plot artifacts render beside released responses and in the inspector. MIRA intake
+  and interview-limit review explicitly identify the same Run's preflight and unresolved facts.
+- Natural clarification replies retain the pending human work request across reloads, even when
+  the model omits continuation. Replacing that request requires human-selected Request work;
+  a unique available dataset no longer needs repeated confirmation.
+- Read-only session answers with missing references receive one bounded citation-repair attempt
+  on the same model route. Verified evidence includes artifact creation names so path-related
+  failures can be explained without treating an artifact's presence as an approved result.
+- Uncertain risk assessments ask bounded, model-generated questions grounded in the actual
+  request, recorded facts and previous answers. Interview-limit reviews explain the exhausted
+  field, question counts, remaining facts and the consequences of approving or rejecting.
+- `run_python` checks bounded Python source syntax before review, reports line/column errors,
+  and preserves the exact submitted source and string escapes.
+- Explicit EDA and plotting requests no longer retain unsolicited Experiment/ML tasks from a
+  proposed plan. New model work requires current human scope; ambiguous evaluation follow-ups
+  request a specific approved source Run and model artifact instead of training by default.
+- Session and Plan now share a bounded model-work resolver over the current human message and
+  explicitly linked human clarifications. LLM `work_kind` remains a proposal; explicit new
+  training needs no prior model, while evaluation keeps the recorded source model and inputs or
+  requests a source instead of falling back to training. Session intake prompts for missing dataset
+  or target details; quote-only requests, explanations and unlinked confirmations stay outside Run
+  publication.
+- Human review cards explain the operation, affected files, recorded effects and consequences
+  of each answer. Unchanged background polls preserve the card, focus and draft without flashing
+  a paused message or disabling the decision controls.
+- Conversation responses remain provisional until MIRA, the findings Gate and any required human
+  approval authorize terminal completion. Rejected or unreviewed output cannot enter follow-up
+  context. Approved resumes preserve the audit binding and require the exact human decision.
+- Session lists filter conversations before pagination and load beyond the former 1,000-session
+  web limit; repeated cursors fail visibly instead of silently truncating history.
 - **The web console now carries THY/MIRA's brand colours.** The top-bar wordmark splits into
   `THY` (blue) and `MIRA` (orange), matching the product logo. The run stepper's active-phase dot
   now switches between the two depending on which orchestrator drives that stage (THY for
@@ -50,6 +177,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   task needs (`GOV-008`), which remains the dominant cost driver for a review-heavy Run.
 
 ### Fixed
+- Follow-up plans separate promised new files from historical references; the runtime compiles
+  those promises into exact publication requirements before plan approval and preserves strict completion.
+- Findings-review scope distinguishes authenticated read-only MIRA regulation lookups from
+  local profiling, preserving exact evidence binding and blocking unsafe or unattributed calls.
+- MIRA's independent profile check accepts JSON null only for an independently recomputed
+  undefined correlation, while rejecting non-JSON NaN claims and incorrect finite values.
+- Risk clarification checks model-reported gaps against declared profile facts before asking
+  again, while preserving required human review and bounded unknown-classification clarification.
+- Proposed plans awaiting human review park for approval instead of failing; an exact approval
+  resumes the recorded candidate without replanning or waiving tool and output checks.
+- Follow-up planning distinguishes current output requests from historical artifact references,
+  so previous EDA filenames do not become new mandatory deliverables without a current request.
+- Dataset correlation profiles serialize undefined correlations as JSON null rather than NaN.
+- Model evaluation recognizes canonical typed success results when completing a task or repairing
+  a failed attempt, while retaining task ownership and verified metrics-publication checks.
+- Local Run reads and appends now share the same per-Run lock, preventing concurrent polling
+  from overwriting or disrupting projection read-back during execution and audit resumes.
+  Genuine projection read-back errors retain their underlying filesystem or JSON cause.
+- Basic descriptive EDA can publish its verified profile and PNG distributions/correlations
+  atomically through `profile_dataset(include_plots=true)`. Charts show their bounded column scope.
+- Agents get one budgeted correction when a successful Python call omitted publication of its
+  claimed outputs. THY reports unresolved task failures even when no files were declared, while
+  preserving successful bounded plot recovery. Superseded artifact revisions no longer count as
+  active integrity failures in MIRA evidence or findings review; archived bytes remain hash-checked.
+- Bounded MIRA evidence keeps the current activity scope, latest executed actions and linked
+  approval chain visible; omitted records are explicit. Oversized events retain valid JSON
+  identity and mark unavailable payloads, leaving references outside the delivered view unresolved.
+- The plan CLI rejects durable boards returned for a different Run.
+- Task completion checks runtime failures and verified deliverables for every output schema.
+  Independent tool success cannot erase required failed work, and dependencies wait for valid
+  task outputs. Evaluation results must identify metrics from a successful recorded evaluation.
+- MIRA finding verification preserves complete candidate and cited audit records, including
+  private approval requests and resolutions, within the final framed-message budget. Missing
+  indispensable evidence retains the finding with an observable unavailable verification.
+  Compaction and regulatory evidence passes only compare or cite complete visible records.
+- Python tools can publish a bounded manifest produced by the saving script, preventing EDA
+  output lists from drifting from the selected columns. Publication failures distinguish a
+  successful interpreter from missing files and report all missing and existing declarations.
+  Registered Python writes reject invalid syntax before approval; agent request budgets now
+  retain recorded task usage across approval resumes and conversation compaction.
+- Coding requests use a provider-compatible Python tool schema while local validation still
+  requires exactly one source. Provider call failures now stop the agent with a provider-error
+  diagnosis instead of consuming every turn and reporting missing outputs as the primary cause.
+- Risk interview prompts keep the required activity fact separate from generated question
+  wording, so consequences are not redefined as mitigation measures. Follow-up prompts retain
+  bounded earlier answers for the same field without changing risk or approval rules.
+- Mandatory MIRA regulation lookups default a missing framework to the auditor's declared
+  framework before authorization and recording, while preserving explicit filters and broad
+  optional searches. EU AI Act audits no longer fail on an omitted search filter alone.
+- Session diagnostic discussion drafts distinguish technical failures from policy blocks and
+  findings, and explain that corrective execution requires a new governed request.
+- MIRA audit producers receive the declared activity scope, recorded approval references and
+  in-flight/final boundary. Run citations must refer to evidence actually exposed in the bounded
+  prompt; discovery rounds receive prior candidates without contaminating the independent critic.
+  Audit instructions distinguish adverse findings from positive statements and dataset columns
+  from actual model features. Existing policy decisions and deterministic controls remain intact.
+- A dataset-only reply in session Auto mode retains its adjacent validated human work request
+  even when the model omits the continuation flag. Intake uses that request rather than unrelated
+  conversation history; an EDA no longer loses its scope when the user supplies the dataset.
+- Execution-risk classification can ask a bounded model-generated question before escalating
+  to review. Selection and pending questions survive retries without duplicate provider calls.
+- Session diagnostics expose recorded recommendations and prepare a read-only follow-up question.
+  Partial-confinement findings describe unenforced limits instead of attributing unrelated Python
+  computation errors to the block.
+- Concurrent local lifecycle/review locks no longer initialize a Windows lock byte before
+  acquiring it, preventing a permission error when another handle already owns that range.
+- A first Session message no longer fails when the interpreter incorrectly marks its initial
+  dataset question as a continuation. Failed-only attempts also permit a new root question,
+  while established history and pending work retain strict clarification binding.
+- Windows private storage updates a directory's ACL without propagating it over existing child
+  files, preventing concurrent projection writes from losing their protected ACL and failing a Run.
+- Session work clarified with a dataset name or short confirmation preserves the preceding human
+  request through Run publication, risk assessment and plan scope. Chat receives declared dataset
+  names/availability and explicit instructions to avoid redundant confirmations.
+- A clarified start review no longer reappears from an older checkpoint. The resumed Run
+  evaluates the corrected profile and records a new execution decision.
+- Interrupted interview answers recover their recorded profile or follow-up without repeating
+  the model judgment. Stale question retries are rejected, and resume serializes with publication.
+- Risk classification receives the values of all declared activity facts, including population,
+  data categories and consequences, instead of only their presence flags.
+- Regulation search includes article locations and requires a matching article number for
+  explicit article queries; EU AI Act Article 11/12/14 searches reach the packaged evidence
+  without substituting unrelated articles or weakening mandatory audit evidence checks.
 - **The Data agent's `max_turns` is 10, not 6.** A clean run of `profile_dataset` plus a few
   `query_sql` calls already spent all 6 turns with nothing left to report a final `DataProfile`,
   so the agent was marked `FAILED` (`end_reason: max_turns`, `stop_reason: out-of-room`) even
