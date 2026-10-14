@@ -839,7 +839,10 @@ class ApiClient:
     def get_durable_plan(self, run_id: str) -> DurablePlanView:
         """Read the latest persisted plan through ``GET /runs/{id}/plan``."""
         payload = self._request("GET", f"/runs/{run_id}/plan", run_id=run_id)
-        return _parse_durable_plan(payload)
+        plan = _parse_durable_plan(payload)
+        if plan.run_id != run_id:
+            raise ApiResponseError("The durable plan belongs to a different Run.")
+        return plan
 
     def get_pending_approval(self, run_id: str) -> PendingApprovalView | None:
         """Fold the Run's event history into the decision it is parked on, if any.

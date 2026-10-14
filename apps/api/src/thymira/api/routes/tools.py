@@ -17,7 +17,9 @@ from thymira.api.errors import problem
 from thymira.api.permissions import Permission
 from thymira.api.principal import require_permission
 from thymira.api.schemas import ToolDescriptor, ToolListResponse
+from thymira.schemas.tool_runtime import ToolRuntimeStatus
 from thymira.tools import input_schema, result_schema
+from thymira.tools.sandbox.readiness import python_runtime_status
 
 if TYPE_CHECKING:
     from thymira.tools import Tool
@@ -48,6 +50,28 @@ def list_tools(risk_tag: str | None = _RISK_TAG, deps: RuntimeDeps = _DEPS) -> T
         if risk_tag is None or risk_tag in tool.capability.risk_tags
     )
     return ToolListResponse(items=descriptors)
+
+
+@router.get(
+    "/runtime-status",
+    response_model=ToolRuntimeStatus,
+    dependencies=[_REQUIRE_READ],
+    responses={
+        422: {
+            "description": "Validation Error",
+            "content": {
+                "application/json": {
+                    "schema": {
+                        "$ref": "#/components/schemas/HTTPValidationError",
+                    }
+                }
+            },
+        }
+    },
+)
+def runtime_status(deps: RuntimeDeps = _DEPS) -> ToolRuntimeStatus:
+    """Report Python prerequisites without running user code or authorizing any tool."""
+    return python_runtime_status(deps.tool_registry)
 
 
 @router.get("/{name}", response_model=ToolDescriptor, dependencies=[_REQUIRE_READ])

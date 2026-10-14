@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 from thymira.api.schemas import ApiError
 from thymira.core import (
+    ConversationHistoryError,
     InvalidRunStateError,
     InvalidRunTransitionError,
     RunNotAwaitingApprovalError,
@@ -96,6 +97,11 @@ def http_error_handler(_request: Request, exc: Exception) -> JSONResponse:
 def domain_error_handler(_request: Request, exc: Exception) -> JSONResponse:
     """Map a known runtime exception to its stable HTTP problem."""
     mappings: dict[type[Exception], tuple[int, str, str]] = {
+        ConversationHistoryError: (
+            409,
+            "conversation_history_unavailable",
+            "The conversation history could not be verified.",
+        ),
         RunNotFoundError: (404, "run_not_found", "The requested Run was not found."),
         SessionNotFoundError: (404, "session_not_found", "The requested Session was not found."),
         SessionProjectMismatchError: (
@@ -136,6 +142,7 @@ def install_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(RequestValidationError, validation_error_handler)
     app.add_exception_handler(HTTPException, http_error_handler)
     for error_type in (
+        ConversationHistoryError,
         RunNotFoundError,
         SessionNotFoundError,
         SessionProjectMismatchError,

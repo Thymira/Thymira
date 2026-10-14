@@ -6,6 +6,7 @@ const TOKEN_KEY = "thymira.console.token";
 const EVENT_PAGE_LIMIT = 1000;
 const RUN_PAGE_LIMIT = 100;
 const MAX_RUN_PAGES = 20;
+const SESSION_PAGE_LIMIT = 200;
 const RECONNECT_MS = 3000;
 
 export class ApiError extends Error {
@@ -107,25 +108,54 @@ export const api = {
     request("GET", "/runs", { query: { status, cursor, limit } }),
   getRun: (runId) => request("GET", `/runs/${segment(runId)}`),
   createRun: (prompt) => request("POST", "/runs", { body: { prompt, client: "web" } }),
+  listSessions: ({ cursor, limit = SESSION_PAGE_LIMIT } = {}) =>
+    request("GET", "/sessions", { query: { cursor, limit } }),
+  createSession: ({ title, client = "web" } = {}) =>
+    request("POST", "/sessions", { body: { title: title?.trim() || undefined, client } }),
+  getSession: (sessionId, { signal } = {}) =>
+    request("GET", `/sessions/${segment(sessionId)}`, { signal }),
+  sendSessionMessage: (sessionId, message, clientMessageId, { signal } = {}) =>
+    request("POST", `/sessions/${segment(sessionId)}/messages`, {
+      body: { message, client_message_id: clientMessageId },
+      signal,
+    }),
+  sendSessionChat: (sessionId, message, clientMessageId, mode, { signal } = {}) =>
+    request("POST", `/sessions/${segment(sessionId)}/chat`, {
+      body: { message, client_message_id: clientMessageId, mode },
+      signal,
+    }),
+  retrySessionDiscussion: (sessionId, discussionId, { signal } = {}) =>
+    request("POST", `/sessions/${segment(sessionId)}/chat/${segment(discussionId)}/retry`, { signal }),
   riskInterview: (runId) => request("GET", `/runs/${segment(runId)}/risk-interview`),
-  answerRiskInterview: (runId, answer) =>
-    request("POST", `/runs/${segment(runId)}/risk-interview`, { body: { answer } }),
+  answerRiskInterview: (runId, answer, expectedQuestionId) =>
+    request("POST", `/runs/${segment(runId)}/risk-interview`, { body: { answer, expected_question_id: expectedQuestionId } }),
+  clarifyRisk: (runId, field, expectedDecisionId) =>
+    request("POST", `/runs/${segment(runId)}/risk-interview/clarify`, {
+      body: { field, expected_decision_id: expectedDecisionId },
+    }),
   resume: (runId) => request("POST", `/runs/${segment(runId)}/resume`, { body: {} }),
   cancel: (runId, reason) =>
     request("POST", `/runs/${segment(runId)}/cancel`, { body: reason ? { reason } : {} }),
-  approve: (runId, note) =>
-    request("POST", `/runs/${segment(runId)}/approve`, { body: note ? { note } : {} }),
-  reject: (runId, note) =>
-    request("POST", `/runs/${segment(runId)}/reject`, { body: note ? { note } : {} }),
+  approve: (runId, note, expectedDecisionId) =>
+    request("POST", `/runs/${segment(runId)}/approve`, { body: { note: note || undefined, expected_decision_id: expectedDecisionId } }),
+  reject: (runId, note, expectedDecisionId) =>
+    request("POST", `/runs/${segment(runId)}/reject`, { body: { note: note || undefined, expected_decision_id: expectedDecisionId } }),
   plan: (runId) => request("GET", `/runs/${segment(runId)}/plan`),
   audit: (runId) => request("GET", `/runs/${segment(runId)}/audit`),
   assurance: (runId) => request("GET", `/runs/${segment(runId)}/assurance`),
   experiments: (runId) => request("GET", `/runs/${segment(runId)}/experiments`),
   mlflow: (runId) => request("GET", `/runs/${segment(runId)}/mlflow`),
-  artifacts: (runId) => request("GET", `/runs/${segment(runId)}/artifacts`),
-  artifact: (runId, artifactId) =>
-    request("GET", `/runs/${segment(runId)}/artifacts/${segment(artifactId)}`),
+  artifacts: (runId, { signal } = {}) =>
+    request("GET", `/runs/${segment(runId)}/artifacts`, { signal }),
+  artifact: (runId, artifactId, { signal } = {}) =>
+    request("GET", `/runs/${segment(runId)}/artifacts/${segment(artifactId)}`, { signal }),
   projectContext: () => request("GET", "/project/context"),
+  projectFiles: (path = "", { signal } = {}) =>
+    request("GET", "/project/files", { query: { path }, signal }),
+  projectFile: (path, { signal } = {}) =>
+    request("GET", "/project/file", { query: { path }, signal }),
+  saveProjectFile: (path, content, expectedSha256) =>
+    request("PUT", "/project/file", { body: { path, content, expected_sha256: expectedSha256 } }),
   saveProjectContext: (text, expectedSha256) =>
     request("PUT", "/project/context", { body: { text, expected_sha256: expectedSha256 } }),
   getSettings: (namespace) => request("GET", `/settings/${segment(namespace)}`),
@@ -133,7 +163,8 @@ export const api = {
     request("PUT", `/settings/${segment(namespace)}`, {
       body: { values, expected_revision: expectedRevision },
     }),
-  projectDatasets: () => request("GET", "/project/datasets"),
+  projectDatasets: ({ signal } = {}) => request("GET", "/project/datasets", { signal }),
+  toolRuntimeStatus: ({ signal } = {}) => request("GET", "/tools/runtime-status", { signal }),
   setDatasetTarget: (name, target) =>
     request("PATCH", `/project/datasets/${segment(name)}`, { body: { target: target || null } }),
   removeDataset: (name) => request("DELETE", `/project/datasets/${segment(name)}`),
@@ -177,6 +208,24 @@ export async function listAllRuns({ status } = {}) {
     cursor = body.next_cursor;
   }
   return runs;
+}
+
+export async function listAllSessions() {
+  const sessions = [];
+  const visitedCursors = new Set();
+  let cursor;
+  for (;;) {
+    if (cursor !== undefined) {
+      if (visitedCursors.has(cursor)) {
+        throw new Error("The Session API returned a repeated cursor.");
+      }
+      visitedCursors.add(cursor);
+    }
+    const body = await api.listSessions({ cursor, limit: SESSION_PAGE_LIMIT });
+    sessions.push(...body.items);
+    if (!body.next_cursor) return sessions;
+    cursor = body.next_cursor;
+  }
 }
 
 export async function readAllEvents(runId, { afterSeq = -1, signal } = {}) {

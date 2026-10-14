@@ -15,6 +15,7 @@ from thymira.api.lifecycle import AuthorityProofBuilder
 from thymira.api.subscription import EventSubscription, PollingEventSubscription
 from thymira.core import (
     AuditFreshnessService,
+    ConversationWorkspace,
     ExecutionDispatcher,
     GoalBoardService,
     GraphFactory,
@@ -33,6 +34,10 @@ from thymira.core import (
     build_runtime_graph_factory,
     composed_graph_definition_hash,
 )
+from thymira.core.model_continuity import materialize_model_inputs
+from thymira.core.runtime_identity import capture_runtime_identity
+from thymira.core.session_chat import SessionChat
+from thymira.core.session_chat_context import discussion_history
 from thymira.mira import canonical_graph_definition_hash
 from thymira.mira.kb import load_default_regulation_store
 from thymira.mira.tools import build_mira_tool_registry
@@ -69,6 +74,7 @@ from thymira.state import (
     SessionRepository,
     resolve_authority_secret,
 )
+from thymira.state.session_discussions import LocalDiscussionRepository
 from thymira.tools import ToolManager, ToolRegistry
 from thymira.tools.builtins import configured_builtins_registry
 
@@ -107,6 +113,8 @@ class RuntimeDeps:
     audit_freshness: AuditFreshnessService
     risk_interview: RiskInterviewService
     session_service: SessionService
+    conversation_workspace: ConversationWorkspace
+    session_chat: SessionChat
     run_store: LocalRunStore
     lifecycle_repository: LocalLifecycleRepository
     run_repository: RunRepository
@@ -362,30 +370,59 @@ def build_default_deps(  # noqa: PLR0915  # one API composition root owns every 
         authority_verifier=authority_verifier,
     )
 
-    if dispatcher is None:
+    create_inline_dispatcher = dispatcher is None
+    if create_inline_dispatcher and graph_factory is None:
+        graph_factory = build_runtime_graph_factory(
+            run_store,
+            gate_factory=gate_factory,
+            artifact_store_factory=artifact_store_factory,
+            prepare_model_inputs=lambda run, store, log, ids: materialize_model_inputs(
+                root,
+                run,
+                store,
+                log,
+                get_run=run_store.get,
+                events=event_store,
+                selected_model_ids=ids,
+            ),
+            tool_manager=tool_manager,
+            tool_registry=tool_registry,
+            mira_tool_registry=resolved_mira_tool_registry,
+            record_repository=record_repository,
+            checkpoint_repository=checkpoint_repository,
+            project_dir=(
+                project_resolution.project_dir if project_resolution is not None else None
+            ),
+            project_config=(project_resolution.config if project_resolution is not None else None),
+            risk_interview=risk_interview,
+            route_policy=route_policy_for,
+            plan_repository=board_repository,
+            dag_repository=dag_repository,
+            usage_ledgers=usage_ledgers,
+        )
+    runtime_catalog = getattr(graph_factory, "runtime_catalog_snapshot", None)
+    runtime_schemas = getattr(graph_factory, "runtime_schemas", None)
+    runtime_catalog_unavailable_reason = getattr(
+        graph_factory,
+        "runtime_catalog_unavailable_reason",
+        None
+        if runtime_catalog is not None
+        else "graph factory did not expose a resolved catalog snapshot",
+    )
+    runtime_identity = capture_runtime_identity(
+        catalog_snapshot=runtime_catalog,
+        catalog_unavailable_reason=runtime_catalog_unavailable_reason,
+        schemas=runtime_schemas,
+    )
+    if create_inline_dispatcher:
         if graph_factory is None:
-            graph_factory = build_runtime_graph_factory(
-                run_store,
-                gate_factory=gate_factory,
-                artifact_store_factory=artifact_store_factory,
-                tool_manager=tool_manager,
-                tool_registry=tool_registry,
-                mira_tool_registry=resolved_mira_tool_registry,
-                record_repository=record_repository,
-                checkpoint_repository=checkpoint_repository,
-                project_dir=(
-                    project_resolution.project_dir if project_resolution is not None else None
-                ),
-                project_config=(
-                    project_resolution.config if project_resolution is not None else None
-                ),
-                risk_interview=risk_interview,
-                route_policy=route_policy_for,
-                plan_repository=board_repository,
-                dag_repository=dag_repository,
-                usage_ledgers=usage_ledgers,
-            )
-        dispatcher = InlineDispatcher(run_store, graph_factory)
+            raise RuntimeError("inline dispatcher requires a composed graph factory")
+        dispatcher = InlineDispatcher(
+            run_store,
+            graph_factory,
+            runtime_identity=runtime_identity,
+            runtime_schemas=runtime_schemas,
+        )
     idempotency_journal = IdempotencyJournal()
     resolved_graph_hash: str | Callable[[], str]
     if graph_definition_hash is None:
@@ -408,12 +445,31 @@ def build_default_deps(  # noqa: PLR0915  # one API composition root owns every 
         gate_factory=gate_factory,
         audit_freshness=audit_freshness,
         lifecycle_repository=lifecycle_repository,
+        runtime_identity=runtime_identity,
+        runtime_schemas=runtime_schemas,
+    )
+    conversation_workspace = ConversationWorkspace(
+        session_service,
+        run_service,
+        event_store,
+        root / "conversations",
+        discussion_history=lambda session_id: discussion_history(
+            LocalDiscussionRepository(root / "discussions", session_id)
+        ),
     )
     return RuntimeDeps(
         run_service=run_service,
         audit_freshness=audit_freshness,
         risk_interview=risk_interview,
         session_service=session_service,
+        conversation_workspace=conversation_workspace,
+        session_chat=SessionChat(
+            conversation_workspace,
+            event_store,
+            root / "discussions",
+            provider,
+            policy=policy_engine.policy,
+        ),
         run_store=run_store,
         lifecycle_repository=lifecycle_repository,
         run_repository=run_repository,

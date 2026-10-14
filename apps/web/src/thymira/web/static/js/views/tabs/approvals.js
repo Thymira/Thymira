@@ -3,9 +3,10 @@ import { clip, timestamp } from "../../format.js";
 import { foldApprovals } from "../../fold.js";
 import { TERMINAL_STATUSES } from "../../status.js";
 import { codeBlock, copyable, empty, kv, mono, panel, table, tag } from "../../ui.js";
+import { approvalReviewContext } from "../session-review.js";
 
 export function renderApprovals(ctx) {
-  const { pending, resolved, parkedDecisionId, focus } = foldApprovals(ctx.events);
+  const { pending, resolved, superseded, parkedDecisionId, focus } = foldApprovals(ctx.events);
   const waiting = ctx.run.status === "WAITING_FOR_APPROVAL";
   const ended = TERMINAL_STATUSES.has(ctx.run.status);
   return h(
@@ -26,9 +27,17 @@ export function renderApprovals(ctx) {
               }),
             ),
           )
-        : empty(ended ? "Every review this run raised was answered." : "Nothing is waiting for a human answer."),
-      { aside: h("span", { class: "muted small" }, "an approval authorizes exactly one call, once") },
+      : empty(ended ? "No unresolved review remains." : "Nothing is waiting for a human answer."),
+      { aside: h("span", { class: "muted small" }, "each answer applies to the recorded decision shown below") },
     ),
+    superseded.length ? panel(
+      `Superseded by risk clarification (${superseded.length})`,
+      h("p", { class: "muted small" }, "These decisions were replaced by an information request. No approval or rejection was recorded."),
+      table([
+        { label: "Review", render: (request) => clip(request.summary || request.reason, 120) },
+        { label: "Superseded", render: (request) => timestamp(request.supersededBy.ts) },
+      ], [...superseded].reverse()),
+    ) : null,
     panel(
       `Answered (${resolved.length})`,
       table(
@@ -78,10 +87,11 @@ function unanswerableHint({ waiting, ended }) {
 }
 
 function reviewCard(ctx, request, { answerable, parked, waiting, ended }) {
+  const review = approvalReviewContext(ctx.events, request);
   const note = h("textarea", { class: "input", rows: 2, placeholder: "Note recorded with your answer (optional)" });
   const status = h("span", { class: "form-status", role: "status" });
-  const approve = h("button", { class: "btn btn-approve", type: "button" }, request.toolCall ? "Approve this call" : "Approve");
-  const reject = h("button", { class: "btn btn-danger", type: "button" }, "Reject");
+  const approve = h("button", { class: "btn btn-approve", type: "button" }, review.review.kind === "tool" ? "Approve this call" : "Approve this review");
+  const reject = h("button", { class: "btn btn-danger", type: "button" }, review.review.kind === "tool" ? "Reject this call" : "Reject this review");
   const setBusy = (busy) => {
     approve.disabled = busy;
     reject.disabled = busy;
@@ -89,10 +99,12 @@ function reviewCard(ctx, request, { answerable, parked, waiting, ended }) {
   };
   const decide = (approved) => async () => {
     setBusy(true);
-    status.textContent = approved ? "Recording the approval; the run continues inside this request…" : "Recording the rejection…";
+    status.textContent = approved ? "Recording your answer for this decision…" : "Recording the rejection…";
     try {
       const text = note.value.trim();
-      const run = approved ? await ctx.api.approve(ctx.runId, text) : await ctx.api.reject(ctx.runId, text);
+      const run = approved
+        ? await ctx.api.approve(ctx.runId, text, request.decisionId)
+        : await ctx.api.reject(ctx.runId, text, request.decisionId);
       note.value = "";
       status.textContent = approved ? "Approved." : "Rejected.";
       await ctx.onRunMutated(run);
@@ -106,23 +118,9 @@ function reviewCard(ctx, request, { answerable, parked, waiting, ended }) {
   return h(
     "article",
     { class: ["card", answerable ? "is-answerable" : null] },
-    h("header", { class: "card-head" }, h("strong", null, request.summary || "Review requested"), parked ? tag("RUN PARKED HERE", "review") : null),
-    kv([
-      ["Reason", request.reason],
-      ["Rule", request.ruleId ? mono(request.ruleId) : null],
-      ["Decision", copyable(request.decisionId)],
-      ["Requested", timestamp(request.ts)],
-      request.sandboxMode ? ["Sandbox", mono(request.sandboxMode)] : null,
-      request.expiresAt ? ["Expires", timestamp(request.expiresAt)] : null,
-    ]),
-    request.toolCall
-      ? h(
-          "div",
-          { class: "stack-tight" },
-          h("span", { class: "muted small" }, "Tool ", mono(request.toolCall.tool), " with these exact arguments"),
-          codeBlock(request.toolCall.arguments ?? {}),
-        )
-      : null,
+    h("header", { class: "card-head" }, h("strong", null, review.title), parked ? tag("RUN PARKED HERE", "review") : null),
+    h("p", { class: "muted small" }, `Requested ${timestamp(request.ts)}`),
+    review.details,
     answerable
       ? h("div", { class: "decide" }, note, h("div", { class: "form-actions" }, status, reject, approve))
       : h("p", { class: "muted small" }, unanswerableHint({ waiting, ended })),

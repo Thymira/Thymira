@@ -307,10 +307,11 @@ export class RunView {
               })
             : null,
           active ? button("Cancel run", { kind: "danger", onClick: () => this.cancel() }) : null,
-          active ? null : button("Run again", { title: "Start a new run with this prompt and the current project inputs", onClick: () => this.runAgain() }),
+          run.conversation ? h("a", { class: "btn", href: `#/sessions/${encodeURIComponent(run.session_id)}` }, "Back to session") : null,
+          active ? null : button("Run again", { title: "Start a new standalone run with this prompt and the current project inputs", onClick: () => this.runAgain() }),
         ),
       ),
-      h("h1", { class: "run-title" }, headline(prompt, 180)),
+      h("h1", { class: "run-title" }, headline(run.conversation?.message ?? prompt, 180)),
       prompt.length > 180 || prompt.includes("\n")
         ? h("details", { class: "prompt" }, h("summary", null, "Full prompt"), h("p", { class: "prompt-text" }, prompt))
         : null,

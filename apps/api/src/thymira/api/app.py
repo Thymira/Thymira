@@ -14,10 +14,12 @@ from thymira.api.routes import (
     artifacts_router,
     audit_router,
     events_router,
+    files_router,
     governance_router,
     mlflow_router,
     project_router,
     runs_router,
+    sessions_router,
     settings_router,
     tools_router,
 )
@@ -90,6 +92,8 @@ def create_app(
     app.state.public_liveness_endpoint = healthz
 
     app.include_router(runs_router)
+    app.include_router(sessions_router)
+    app.include_router(files_router)
     app.include_router(settings_router)
     app.include_router(events_router)
     app.include_router(audit_router)

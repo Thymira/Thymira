@@ -85,7 +85,7 @@ export function riskTone(level) {
 export function outcomeTone(value) {
   const text = String(value ?? "").toUpperCase();
   if (/(FAIL|BLOCK|DENIED|REJECT|ERROR|TAMPER)/.test(text)) return "block";
-  if (/(WARN|PARK|PENDING|WAIT|SKIP)/.test(text)) return "warn";
+  if (/(INCOMPLETE|WARN|PARK|PENDING|WAIT|SKIP)/.test(text)) return "warn";
   if (/(PASS|SUCCESS|COMPLETE|DONE|APPROVED|ACTIVE)/.test(text)) return "ok";
   if (/(RUN|START|PROGRESS)/.test(text)) return "active";
   return "neutral";

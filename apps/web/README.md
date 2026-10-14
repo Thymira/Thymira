@@ -1,8 +1,9 @@
 # thymira-web
 
-The Thymira web console: a local browser client of the Thymira API. It lists Runs, creates one,
-answers its risk interview, and shows each Run's overview, plan, agents, reviews, tool calls,
-artifacts, MIRA audit, live events and model usage.
+The Thymira web console: a local browser client of the Thymira API. It keeps follow-up messages in
+conversation Sessions, while each message starts a Run. The standalone Runs view remains available
+for direct access to every Run's overview, interview, plan, agents, reviews, tool calls, artifacts,
+MIRA audit, live events, inputs and model usage.
 
 | | |
 |---|---|
@@ -47,6 +48,28 @@ Creating a Run starts it: the API dispatches it as soon as it is recorded. A Run
 interview answer marks its Interview tab (answer there, Ctrl+Enter), and a Run waiting for a review
 marks its Approvals tab. "Run again" starts a new Run with the same prompt.
 
+## Sessions and project explorer
+
+Sessions keep the user's messages and THYMIRA's returned responses together across follow-up Runs.
+The current turn must finish before the composer accepts another message. If a send's network
+result is uncertain, the console keeps that exact message and request id available for a safe retry.
+Human reviews can be answered directly in the session chat. The card explains the recorded risk
+and missing context, exact tool arguments, plan or findings as applicable, plus what the answer
+covers. Both answers carry the displayed decision ID; stale or unreadable evidence disables them.
+Risk questions appear inside the session and record answers against the displayed question. The
+start-review card can open the declared context and request a correction; this keeps execution
+stopped and reclassifies the same Run after the answer. Run-level Interview remains available.
+Open a turn's Run for the remaining controls, including cancel.
+
+The Explorer edits existing bounded UTF-8 project files. Save checks the loaded revision; a
+conflict retains the draft. Hidden or credential-like paths are excluded, and redacted or
+truncated files remain read-only. Changes affect the shared project, not an already registered
+Run input or immutable artifact. The session's Datasets inspector and
+"Add / manage datasets" button reuse the project upload, replacement and target controls. Inputs
+are shared by the project's sessions, with changes applying when the next Run registers sources.
+Missing declared files disable new sends and name the file to replace; the API enforces the same
+readiness check. Existing Inputs and Project inputs views remain available for datasets and context.
+
 ## Project inputs
 
 A Run reads what the project declares: `.thymira/context.md` and the datasets
@@ -67,4 +90,5 @@ writes nothing itself.
 ## Rules
 
 - Imports no runtime member: HTTP to the API only (import-linter contract "Clients own no state").
-- Everything is English; tests live in `tests/thymira/test_web.py`.
+- Everything is English. The web proxy tests live in `tests/thymira/test_web.py`; session UI
+  behavior is tested without added dependencies with `node --test apps/web/tests/*.mjs`.

@@ -87,7 +87,7 @@ _SECURITY_HEADERS: tuple[tuple[bytes, bytes], ...] = (
     (b"cache-control", b"no-store"),
 )
 _SECURITY_HEADER_NAMES = frozenset(name for name, _ in _SECURITY_HEADERS)
-_API_ROOTS = frozenset({"healthz", "project", "runs", "settings", "tools"})
+_API_ROOTS = frozenset({"healthz", "project", "runs", "sessions", "settings", "tools"})
 _SEGMENT = re.compile(r"[A-Za-z0-9_.~-]+")
 _DOT_SEGMENTS = frozenset({".", ".."})
 _SAFE_METHODS = frozenset({"GET", "HEAD"})

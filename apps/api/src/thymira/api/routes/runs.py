@@ -18,6 +18,7 @@ from thymira.api.routes._scope import (
 )
 from thymira.api.schemas import (
     AnswerRiskInterviewRequest,
+    ClarifyRiskInterviewRequest,
     CreateRunRequest,
     DelegateRequest,
     DurablePlanResponse,
@@ -42,6 +43,7 @@ from thymira.core import (
     SessionProjectMismatchError,
     default_activity_profile,
 )
+from thymira.core.human_review import RunReviewChangedError
 from thymira.observability import trace_url
 from thymira.schemas import Actor, Agent, Id, Layer, Run, RunStatus, Task, new_id
 
@@ -117,6 +119,13 @@ def _create_run(
     except SessionProjectMismatchError as exc:
         raise problem(404, "session_not_found", str(exc)) from exc
 
+    if session.conversation:
+        raise problem(
+            409,
+            "conversation_endpoint_required",
+            "Send messages through this session's messages endpoint.",
+        )
+
     if deps.project_resolution is None:
         raise AssertionError("project resolution was checked before session resolution")
     try:
@@ -188,6 +197,7 @@ def _risk_interview_response(run: Run, deps: RuntimeDeps) -> RiskInterviewRespon
     pending = (
         PendingRiskQuestionResponse(
             field=question.field,
+            event_id=question.event_id,
             question=question.question,
             profile_id=question.profile_id,
             profile_version=question.profile_version,
@@ -238,11 +248,39 @@ def answer_risk_interview(
             run_id,
             answer=payload.answer,
             actor=resolve_actor(request),
+            expected_question_id=payload.expected_question_id,
         )
     except RunInformationRequiredError as exc:
         raise problem(409, "risk_interview_not_pending", str(exc)) from exc
     except ValueError as exc:
         raise problem(422, "invalid_risk_interview_answer", str(exc)) from exc
+    return _risk_interview_response(run, deps)
+
+
+@router.post(
+    "/{run_id}/risk-interview/clarify",
+    response_model=RiskInterviewResponse,
+    status_code=202,
+    dependencies=[_REQUIRE_WRITE],
+)
+def clarify_risk_interview(
+    run_id: Id,
+    payload: ClarifyRiskInterviewRequest,
+    request: Request,
+    deps: RuntimeDeps = _DEPS,
+) -> RiskInterviewResponse:
+    """Replace the exact parked planning risk review with one bounded fact question."""
+    run_id = _validate_run_id(run_id)
+    _scoped_run(deps, run_id)
+    try:
+        run = deps.run_service.clarify_risk_interview(
+            run_id,
+            field=payload.field,
+            expected_decision_id=payload.expected_decision_id,
+            actor=resolve_actor(request),
+        )
+    except RunInformationRequiredError as exc:
+        raise problem(409, "risk_review_changed", str(exc)) from exc
     return _risk_interview_response(run, deps)
 
 
@@ -452,7 +490,10 @@ def _resolve_human_decision(
             gate=gate,
             actor=actor,
             note=payload.note,
+            expected_decision_id=payload.expected_decision_id,
         )
+    except RunReviewChangedError as exc:
+        raise problem(409, "approval_changed", str(exc)) from exc
     except RunAuditStaleError as exc:
         raise problem(409, "audit_stale", str(exc)) from exc
     except RunNotAwaitingApprovalError as exc:

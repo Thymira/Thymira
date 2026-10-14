@@ -124,10 +124,10 @@ export class RunRail {
           class: ["rail-item", run.id === this.selected ? "is-selected" : null],
           href: `#/runs/${encodeURIComponent(run.id)}`,
           dataset: { runId: run.id },
-          title: run.prompt,
+          title: run.conversation?.message ?? run.prompt,
         },
         h("i", { class: `sq tone-${statusTone(run.status)}`, title: statusLabel(run.status) }),
-        h("span", { class: "rail-item-title" }, headline(run.prompt, 110)),
+        h("span", { class: "rail-item-title" }, headline(run.conversation?.message ?? run.prompt, 110)),
         h(
           "span",
           { class: "rail-item-meta" },

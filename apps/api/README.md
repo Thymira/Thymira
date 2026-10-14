@@ -23,6 +23,15 @@ surfaces for its configured project. The MVP still uses
 local JSON/JSONL persistence. Basic OpenTelemetry request tracing is installed with a no-op
 exporter by default; set `OTEL_TRACES_EXPORTER=otlp` to configure an OTLP collector.
 
+Persistent conversations use `/sessions` and `/sessions/{id}/messages`. Each ordered turn is
+an ordinary Run with original-message metadata and a bounded snapshot of earlier verified
+response summaries. Existing Run controls and artifacts remain available by Run id. The
+project explorer exposes bounded `/project/files` and `/project/file` reads under READ, plus
+revision-checked text writes to `/project/file` under WRITE. Risk interview answers and context
+clarification remain Run-scoped, with expected question/decision identities for stale clients.
+See [conversation contracts](../../docs/contracts/conversation-sessions.md)
+for retry identities, concurrency, persistence and privacy limits.
+
 Run the local MVP server from the repository root with:
 
 ```bash

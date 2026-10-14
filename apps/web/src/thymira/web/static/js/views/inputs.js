@@ -12,26 +12,30 @@ const EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b78
 const knownColumns = new Map();
 
 export function renderProjectInputs({ onUseDataset } = {}) {
-  const datasets = h("div", { class: "stack-tight" }, loading("Reading the declared datasets…"));
   const context = h("div", { class: "stack-tight" }, loading("Reading context.md…"));
-  const options = { onUseDataset };
-  loadDatasets(datasets, options);
   loadContext(context);
   return h(
     "div",
     { class: "inputs" },
-    panel("Datasets", datasets, {
-      aside: h("span", { class: "muted small" }, "each is registered as a source when a run starts"),
-    }),
+    renderProjectDatasets({ onUseDataset }),
     panel("Context · .thymira/context.md", context, {
       aside: h("span", { class: "muted small" }, "read by the interview, the plan and every agent"),
     }),
   );
 }
 
+export function renderProjectDatasets(options = {}) {
+  const datasets = h("div", { class: "stack-tight" }, loading("Reading the declared datasets…"));
+  loadDatasets(datasets, options);
+  return panel("Datasets", datasets, {
+    aside: h("span", { class: "muted small" }, "Project inputs shared by sessions; changes apply to the next run."),
+  });
+}
+
 async function loadDatasets(holder, options, flash) {
   try {
     const body = await api.projectDatasets();
+    options.onDatasetsChanged?.(body.items);
     replace(
       holder,
       flash ? notice(flash.text, flash.tone) : null,
@@ -165,6 +169,7 @@ function addForm(holder, options, items) {
 }
 
 async function upload(holder, options, { name, file, target, status, progress, submit }) {
+  options.onUploadStateChanged?.(true);
   if (submit) submit.disabled = true;
   if (progress) {
     progress.hidden = false;
@@ -191,6 +196,8 @@ async function upload(holder, options, { name, file, target, status, progress, s
     status.textContent = `${error.code}: ${error.message}`;
     if (submit) submit.disabled = false;
     if (progress) progress.hidden = true;
+  } finally {
+    options.onUploadStateChanged?.(false);
   }
 }
 

@@ -12,7 +12,11 @@ import { HomeView } from "./views/home.js";
 import { NewRunView } from "./views/new-run.js";
 import { RunRail } from "./views/rail.js";
 import { RunView } from "./views/run.js";
+import { SessionRail } from "./views/sessions.js";
+import { SessionView } from "./views/session.js";
+import { ProjectExplorerView } from "./views/explorer.js";
 import { SettingsView } from "./views/settings.js";
+import { h, replace } from "./dom.js";
 
 const HEALTH_MS = 15000;
 
@@ -24,8 +28,17 @@ const connectError = document.getElementById("connect-error");
 const cancelButton = document.getElementById("connect-cancel");
 const lockButton = document.getElementById("lock");
 const apiState = document.getElementById("api-state");
+const shell = document.getElementById("shell");
+const inspector = document.getElementById("inspector");
+const sessionRailRoot = document.getElementById("session-rail");
+const runRailRoot = document.getElementById("run-rail");
 
-const rail = new RunRail(document.getElementById("rail"));
+const rail = new RunRail(runRailRoot);
+const sessionRail = new SessionRail(sessionRailRoot, {
+  onCreated: (session) => {
+    window.location.hash = `#/sessions/${encodeURIComponent(session.id)}`;
+  },
+});
 let view = null;
 let dismissed = false;
 
@@ -43,15 +56,62 @@ function show(next) {
 }
 
 function route() {
-  const [section, id, tab, item] = routeParts();
+  const [section, id, subroute, subrouteId] = routeParts();
+  const sessionsPage = !section || section === "sessions";
+  const wasSessionsPage = !sessionRailRoot.hidden;
+  sessionRailRoot.hidden = !sessionsPage;
+  runRailRoot.hidden = sessionsPage;
+  if (wasSessionsPage !== sessionsPage) refreshVisibleRail();
+  inspector.hidden = true;
+  shell.dataset.inspector = "closed";
+
+  if (sessionsPage) {
+    rail.select(null);
+    sessionRail.select(section === "sessions" ? id : null);
+    if (!id) {
+      show({ dispose() {} });
+      replace(
+        main,
+        h("section", { class: "home sessions-home" },
+          h("p", { class: "eyebrow" }, "Thymira workspace"),
+          h("h1", null, "Conversations that continue across runs."),
+          h("p", { class: "lede" }, "Ask about recorded session evidence at any time, including while a run is active. Auto answers from that evidence when possible and starts governed work when needed; Request work starts governed work directly. Work stays linked to its events, approvals, interview, artifacts and audit."),
+          h("div", { class: "home-actions" }, h("a", { class: "btn btn-primary", href: "#/runs" }, "Open runs")),
+          h("p", { class: "muted small" }, "Choose a conversation from the sidebar, or create a new session to begin."),
+        ),
+      );
+      return;
+    }
+    shell.dataset.inspector = "open";
+    inspector.hidden = false;
+    const panel = ["artifacts", "datasets"].includes(subroute) ? subroute : "files";
+    if (view instanceof SessionView && view.sessionId === id) {
+      view.updateRoute(panel, panel === "artifacts" ? subrouteId : null);
+      return;
+    }
+    show(new SessionView(main, inspector, id, {
+      onSessionChanged: (session, turns) => sessionRail.upsert(session, turns),
+    }));
+    view.updateRoute(panel, panel === "artifacts" ? subrouteId : null);
+    return;
+  }
+
+  if (section === "project") {
+    sessionRail.select(null);
+    rail.select(null);
+    show(new ProjectExplorerView(main));
+    return;
+  }
+
   if (section === "runs" && id) {
+    sessionRail.select(null);
     rail.select(id);
     if (view instanceof RunView && view.runId === id) {
-      view.setTab(tab, item);
+      view.setTab(subroute, subrouteId);
       return;
     }
     show(
-      new RunView(main, id, tab, item, {
+      new RunView(main, id, subroute, subrouteId, {
         onRunChanged: (run) => rail.upsert(run),
         onRunCreated: (run) => {
           rail.upsert(run);
@@ -62,6 +122,11 @@ function route() {
     return;
   }
   rail.select(null);
+  sessionRail.select(null);
+  if (section === "runs") {
+    show(new HomeView(main));
+    return;
+  }
   if (section === "new") {
     show(
       new NewRunView(main, {
@@ -82,6 +147,11 @@ function route() {
 
 function syncLock() {
   lockButton.textContent = getToken() ? "Disconnect" : "Connect";
+}
+
+function refreshVisibleRail() {
+  if (sessionRailRoot.hidden) rail.refresh();
+  else sessionRail.refresh();
 }
 
 function openConnect(message) {
@@ -108,7 +178,7 @@ form.addEventListener("submit", async (event) => {
     syncLock();
     show(null);
     route();
-    rail.refresh();
+    refreshVisibleRail();
   } catch (error) {
     clearToken();
     syncLock();
@@ -125,7 +195,7 @@ lockButton.addEventListener("click", () => {
   if (getToken()) {
     clearToken();
     syncLock();
-    rail.refresh();
+    refreshVisibleRail();
   }
   openConnect();
 });
@@ -147,7 +217,7 @@ async function pollHealth() {
 window.addEventListener("hashchange", route);
 syncLock();
 route();
-rail.refresh();
+refreshVisibleRail();
 pollHealth();
 setInterval(() => {
   if (!document.hidden) pollHealth();

@@ -84,7 +84,27 @@ class AnswerRiskInterviewRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    answer: str = Field(min_length=1)
+    answer: str = Field(min_length=1, max_length=8000)
+    expected_question_id: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+class ClarifyRiskInterviewRequest(BaseModel):
+    """One bounded profile fact to clarify for the exact parked risk review."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    field: Literal[
+        "purpose",
+        "affected_population",
+        "decision_effect",
+        "autonomy",
+        "human_oversight",
+        "jurisdiction",
+        "data_categories",
+        "sensitive_attributes",
+        "potential_consequences",
+    ]
+    expected_decision_id: str = Field(min_length=1, max_length=128)
 
 
 class PendingRiskQuestionResponse(BaseModel):
@@ -93,6 +113,7 @@ class PendingRiskQuestionResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     field: str = Field(min_length=1)
+    event_id: Id
     question: str = Field(min_length=1)
     profile_id: Id
     profile_version: int = Field(ge=1)
@@ -122,6 +143,7 @@ class HumanDecisionRequest(BaseModel):
 
     actor: str | None = Field(default=None, min_length=1)
     note: str | None = None
+    expected_decision_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class DelegateRequest(BaseModel):
