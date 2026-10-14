@@ -20,6 +20,7 @@ from thymira.mira.agents.loader import load_default_specs
 from thymira.mira.agents.runner import AuditAgentContext, run_audit_agent
 from thymira.mira.audit_io import AuditInput
 from thymira.mira.checks import AuditReport
+from thymira.mira.grounding import regulation_search_result
 from thymira.mira.kb import (
     LocalRegulationStore,
     RegulationChunk,
@@ -314,6 +315,61 @@ def test_shipped_credit_risk_agent_completes_with_packaged_scope_evidence(
     agent_completion = log.events()[-1]
     assert agent_completion.type is EventType.AGENT_COMPLETED
     assert agent_completion.payload["status"] == "COMPLETED"
+
+
+def test_credit_risk_agent_preserves_explicit_gdpr_lookup(tmp_path: Path) -> None:
+    """Credit-risk's permitted secondary GDPR lookup remains an explicit framework filter."""
+    log = InMemoryEventLog(new_id("run"))
+    agent_id = new_id("agent")
+    task_id = new_id("task")
+    provider = ScriptedProvider(
+        [
+            LLMToolCall(
+                id="call-credit-risk",
+                name="search_regulation",
+                arguments={
+                    "query": "creditworthiness credit score",
+                    "framework": "CREDIT_RISK",
+                    "k": 5,
+                },
+            ),
+            LLMToolCall(
+                id="call-gdpr",
+                name="search_regulation",
+                arguments={
+                    "query": "personal data accountability",
+                    "framework": "GDPR",
+                    "k": 5,
+                },
+            ),
+            LLMToolCall(id="call-output", name="final_result", arguments={"findings": []}),
+        ]
+    )
+    tool = SearchRegulation(load_default_regulation_store())
+    context = AuditAgentContext(
+        route_policy=TEST_ROUTE_POLICY,
+        event_log=log,
+        actor=Actor.system(),
+        agent_id=agent_id,
+        task_id=task_id,
+        provider=provider,
+        tool_registry=ToolRegistry((cast("Tool", tool),)),
+        tool_context=_tool_context(tmp_path, log=log, agent_id=agent_id, task_id=task_id),
+    )
+
+    output = run_audit_agent(_credit_risk_spec(), _input_for_descriptive_run(log), context)
+
+    assert output.findings == ()
+    started = [event for event in log.events() if event.type is EventType.TOOL_STARTED]
+    assert len(started) == 2
+    assert started[1].payload["arguments"]["framework"] == Framework.GDPR.value
+    completed = [event for event in log.events() if event.type is EventType.TOOL_COMPLETED]
+    assert len(completed) == 2
+    result, error = regulation_search_result(completed[1])
+    assert error is None
+    assert result is not None
+    assert result.matches
+    assert {match.framework for match in result.matches} == {Framework.GDPR}
 
 
 def test_credit_risk_flags_a_model_trained_on_a_protected_attribute(tmp_path: Path) -> None:

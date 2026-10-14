@@ -17,6 +17,8 @@ asserts the shipped prompt says so.
 
 from __future__ import annotations
 
+import json
+import re
 import traceback
 from typing import TYPE_CHECKING
 
@@ -135,6 +137,21 @@ def _context(log: InMemoryEventLog, provider: ScriptedProvider) -> AuditAgentCon
     )
 
 
+def _framed_json(prompt: str) -> dict[str, object]:
+    """Parse the payload from one intact compaction-fidelity frame."""
+    match = re.search(
+        r"<<<THYMIRA_UNTRUSTED:(?P<nonce>[0-9a-f]{32}):mira-compaction-evidence:START>>>\n"
+        r"The following[^\n]*\n(?P<payload>.*?)\n"
+        r"<<<THYMIRA_UNTRUSTED:(?P=nonce):mira-compaction-evidence:END>>>",
+        prompt,
+        re.DOTALL,
+    )
+    assert match is not None, "provider prompt must preserve its complete nonce frame"
+    value = json.loads(match.group("payload"))
+    assert isinstance(value, dict)
+    return value
+
+
 def _gap(*, compaction_seq: int, omitted_seqs: list[int]) -> dict[str, object]:
     """Return one scripted fidelity gap about ``compaction_seq``."""
     return {
@@ -250,7 +267,7 @@ def test_a_gap_about_a_nonexistent_compaction_is_dropped() -> None:
 
 
 def test_the_agent_sees_shadowed_events_the_current_surface_hides_and_records_lifecycle() -> None:
-    log, failure_seq, _compaction_seq = _build_run(_DROPPED_SUMMARY)
+    log, failure_seq, compaction_seq = _build_run(_DROPPED_SUMMARY)
     audit_input = _audit_input(log)
     provider = ScriptedProvider([{"gaps": []}])
     context = _context(log, provider)
@@ -271,11 +288,121 @@ def test_the_agent_sees_shadowed_events_the_current_surface_hides_and_records_li
     assert (
         _TOOL_ERROR not in _DROPPED_SUMMARY
     )  # the error text can only come from the shadowed event
+    assert len(provider.calls[0]["prompt"]) <= 12_000
+    projection = _framed_json(provider.calls[0]["prompt"])
+    comparisons = projection["compactions"]
+    assert isinstance(comparisons, list)
+    assert len(comparisons) == 1
+    comparison = comparisons[0]
+    assert isinstance(comparison, dict)
+    assert comparison["summary"] == _DROPPED_SUMMARY
+    compaction_record = comparison["compaction"]
+    assert isinstance(compaction_record, dict)
+    compaction_event = next(event for event in audit_input.events if event.seq == compaction_seq)
+    assert compaction_record == compaction_event.model_dump(mode="json")
+    shadowed = comparison["shadowed_events"]
+    assert isinstance(shadowed, list)
+    assert any(
+        event["payload"].get("error")
+        for event in shadowed
+        if isinstance(event, dict) and isinstance(event.get("payload"), dict)
+        if event["type"] == EventType.TOOL_COMPLETED.value
+    )
 
     starts = [event for event in log.events() if event.type is EventType.AGENT_STARTED]
     completes = [event for event in log.events() if event.type is EventType.AGENT_COMPLETED]
     assert len(starts) == 1
     assert len(completes) == 1
+
+
+def test_incomplete_large_shadowed_record_is_not_submitted_for_adjudication() -> None:
+    """A compaction is skipped when its complete comparison cannot fit the provider budget."""
+    log = InMemoryEventLog(new_id("run"))
+    failure = log.append(
+        EventType.TOOL_COMPLETED,
+        Actor.system(),
+        {"tool": "run_python", "success": False, "error": "MANDATORY_ERROR " + ("x" * 20_000)},
+        surface=EventSurface.MODEL_VISIBLE,
+    )
+    compaction = log.append(
+        EventType.CONTEXT_COMPACTED,
+        Actor.system(),
+        {
+            "shadowed_seqs": [failure.seq],
+            "envelope": dict(_ENVELOPE),
+            COMPACTION_SUMMARY_KEY: _DROPPED_SUMMARY,
+        },
+        surface=EventSurface.LOG_ONLY,
+    )
+    provider = ScriptedProvider(
+        [{"gaps": [_gap(compaction_seq=compaction.seq, omitted_seqs=[failure.seq])]}]
+    )
+    context = _context(log, provider)
+
+    audit_compaction_fidelity(_compaction_fidelity_spec(), _audit_input(log), context)
+
+    for call in provider.calls:
+        _framed_json(call["prompt"])
+    assert provider.calls == []
+    completed = next(event for event in log.events() if event.type is EventType.AGENT_COMPLETED)
+    assert completed.payload["model_call_skipped"] is True
+    assert completed.payload["omitted_compaction_count"] == 1
+
+
+def test_model_cannot_mint_a_gap_for_an_omitted_compaction_subject() -> None:
+    """Only comparison subjects present in the whole-record prompt may become findings."""
+    log = InMemoryEventLog(new_id("run"))
+    large = log.append(
+        EventType.TOOL_COMPLETED,
+        Actor.system(),
+        {"tool": "run_python", "success": False, "error": "x" * 20_000},
+        surface=EventSurface.MODEL_VISIBLE,
+    )
+    omitted = log.append(
+        EventType.CONTEXT_COMPACTED,
+        Actor.system(),
+        {
+            "shadowed_seqs": [large.seq],
+            "envelope": dict(_ENVELOPE),
+            COMPACTION_SUMMARY_KEY: _DROPPED_SUMMARY,
+        },
+        surface=EventSurface.LOG_ONLY,
+    )
+    small = log.append(
+        EventType.AGENT_MESSAGE,
+        Actor.system(),
+        {"text": "A small shadowed fact."},
+        surface=EventSurface.MODEL_VISIBLE,
+    )
+    visible = log.append(
+        EventType.CONTEXT_COMPACTED,
+        Actor.system(),
+        {
+            "shadowed_seqs": [small.seq],
+            "envelope": dict(_ENVELOPE),
+            COMPACTION_SUMMARY_KEY: "A small summary.",
+        },
+        surface=EventSurface.LOG_ONLY,
+    )
+    provider = ScriptedProvider(
+        [{"gaps": [_gap(compaction_seq=omitted.seq, omitted_seqs=[large.seq])]}]
+    )
+    context = _context(log, provider)
+
+    result = audit_compaction_fidelity(_compaction_fidelity_spec(), _audit_input(log), context)
+
+    assert result.findings == ()
+    projection = _framed_json(provider.calls[0]["prompt"])
+    comparisons = projection["compactions"]
+    assert isinstance(comparisons, list)
+    assert len(comparisons) == 1
+    comparison = comparisons[0]
+    assert isinstance(comparison, dict)
+    projected_compaction = comparison["compaction"]
+    assert isinstance(projected_compaction, dict)
+    assert projected_compaction["seq"] == visible.seq
+    completed = next(event for event in log.events() if event.type is EventType.AGENT_COMPLETED)
+    assert completed.payload["omitted_compaction_count"] == 1
 
 
 def test_load_default_specs_ships_the_compaction_fidelity_agent() -> None:

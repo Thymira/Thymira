@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from thymira.schemas import Framework
 
 _TOKEN_PATTERN = re.compile(r"[^\W_]+", flags=re.UNICODE)
+_ARTICLE_REFERENCE = re.compile(r"\b(?:article|art\.?)\s+(\d+[a-z]?)\b")
 _DEFAULT_BACKEND = "local-keyword"
 _CORPUS_PACKAGE = "thymira.mira.kb.corpus"
 _CORPUS_RESOURCE = "regulation.jsonl"
@@ -47,14 +48,19 @@ class LocalRegulationStore:
             raise ValueError("query must contain an alphanumeric token")
 
         query_counts = Counter(query_tokens)
+        requested_articles = set(_ARTICLE_REFERENCE.findall(normalized_query))
         scored: list[tuple[int, int, RegulationChunk]] = []
         for index, chunk in enumerate(self._chunks):
             if framework is not None and chunk.framework is not framework:
                 continue
-            text = chunk.text.casefold()
-            chunk_counts = Counter(_tokenize(text))
+            searchable_text = f"{chunk.location} {chunk.text}".casefold()
+            if requested_articles and not requested_articles.intersection(
+                _ARTICLE_REFERENCE.findall(chunk.location.casefold())
+            ):
+                continue
+            chunk_counts = Counter(_tokenize(searchable_text))
             score = sum(count * chunk_counts[token] for token, count in query_counts.items())
-            if normalized_query in text:
+            if normalized_query in searchable_text:
                 score += 1
             if score:
                 scored.append((score, index, chunk))

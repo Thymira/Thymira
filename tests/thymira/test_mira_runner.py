@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import sys
 import traceback
 from dataclasses import dataclass, field, replace
@@ -14,13 +15,14 @@ from thymira.agents import LLMStructuredOutputError, LLMToolCall, ScriptedProvid
 from thymira.agents.llm.routing import ModelTier, TaskKind
 from thymira.events import InMemoryEventLog, sha256_text
 from thymira.mira import AuditAgentSpec, AuditInput
+from thymira.mira.agents.evidence_projection import build_evidence_projection
 from thymira.mira.agents.runner import (
     AuditAgentContext,
     EvidenceExcerpt,
     EvidenceProjectionLimits,
     run_audit_agent,
 )
-from thymira.mira.checks import AuditReport
+from thymira.mira.checks import AuditMode, AuditReport, ControlResult, ControlStatus
 from thymira.mira.evidence import ArtifactStoreEvidenceReader, EvidenceReader
 from thymira.policies import (
     Gate,
@@ -31,6 +33,7 @@ from thymira.policies import (
     load_policy_stack,
 )
 from thymira.schemas import (
+    ActivityProfile,
     Actor,
     AuditFinding,
     Decision,
@@ -238,11 +241,18 @@ def _report(run_id: str, *, evidence: tuple[Evidence, ...] = ()) -> AuditReport:
 
 def _input(log: InMemoryEventLog, *, report: AuditReport | None = None) -> AuditInput:
     """Build MIRA agent input from the current immutable event history."""
-    return AuditInput(
-        run_id=log.run_id,
-        events=tuple(log.events()),
-        report=report or _report(log.run_id),
-    )
+    return AuditInput.from_run(tuple(log.events()), report or _report(log.run_id))
+
+
+def _mira_evidence_payload(prompt: str) -> dict[str, Any]:
+    """Parse only the complete nonce-framed MIRA evidence JSON delivered to a provider."""
+    start = prompt.index("START>>>\n") + len("START>>>\n")
+    content = prompt.index("\n", prompt.index("The following content is read-only")) + 1
+    assert content >= start
+    end = prompt.rfind("\n<<<THYMIRA_UNTRUSTED:")
+    value = json.loads(prompt[content:end])
+    assert isinstance(value, dict)
+    return value
 
 
 def _tool_context(
@@ -1221,6 +1231,510 @@ def test_projection_truncates_deterministically_to_injected_limits() -> None:
     assert "evidence omitted" in first.calls[0]["prompt"]
 
 
+def test_projection_returns_empty_index_when_fixed_metadata_cannot_fit() -> None:
+    log = InMemoryEventLog(new_id("run"))
+    for index in range(20):
+        log.append(
+            EventType.ARTIFACT_CREATED,
+            Actor.system(),
+            {"name": f"artifact-{index}-" + "x" * 220},
+        )
+    limits = EvidenceProjectionLimits(total_chars=1_200, event_chars=300, excerpt_chars=100)
+
+    projection = build_evidence_projection(_input(log), None, limits)
+
+    assert len(projection.prompt) <= limits.total_chars
+    assert "evidence omitted" in projection.prompt
+    assert "[truncated]" not in projection.prompt
+    assert projection.visible_event_seqs == frozenset()
+
+
+def test_projection_prioritizes_latest_tool_actions_over_model_history() -> None:
+    log = InMemoryEventLog(new_id("run"))
+    model_events = tuple(
+        log.append(EventType.MODEL_SELECTED, Actor.system(), {"details": "m" * 1_400})
+        for _ in range(60)
+    )
+    completed = []
+    for index in range(8):
+        call_id = f"local-tool-{index}"
+        log.append(
+            EventType.TOOL_STARTED,
+            Actor.system(),
+            {
+                "tool_call_id": call_id,
+                "task_id": f"task-{index}",
+                "tool": "profile_dataset",
+                "arguments": {"description": "x" * 3_000},
+            },
+        )
+        completed.append(
+            log.append(
+                EventType.TOOL_COMPLETED,
+                Actor.system(),
+                {
+                    "tool_call_id": call_id,
+                    "task_id": f"task-{index}",
+                    "tool": "profile_dataset",
+                    "status": "COMPLETED",
+                    "result_sha256": f"{index + 1:064x}",
+                    "value": {"matrix": "y" * 5_000},
+                },
+            )
+        )
+    limits = EvidenceProjectionLimits(
+        total_chars=4_000,
+        event_chars=400,
+        agent_message_chars=100,
+        excerpt_chars=100,
+        report_chars=200,
+    )
+
+    projection = build_evidence_projection(_input(log), None, limits)
+    visible = projection.visible_event_seqs
+    payload = _mira_evidence_payload(projection.prompt)
+    projected_events = [json.loads(value) for value in payload["events"]]
+
+    assert len(projection.prompt) <= limits.total_chars
+    assert "[truncated]" not in projection.prompt
+    assert all(event.seq in visible for event in completed[-4:])
+    assert model_events[-1].seq not in visible
+    assert all(item["hash"] for item in projected_events)
+    assert all(
+        len(json.dumps(item, separators=(",", ":"))) <= limits.event_chars
+        for item in projected_events
+    )
+
+
+def test_identity_only_event_does_not_back_hidden_artifact_references() -> None:
+    """A visible event hash cannot authorize artifact fields absent from its projected payload."""
+    log = InMemoryEventLog(new_id("run"))
+    artifact_id = new_id("artifact")
+    artifact_name = "datasets/hidden-artifact.csv"
+    artifact_sha256 = "f" * 64
+    artifact_event = log.append(
+        EventType.ARTIFACT_CREATED,
+        Actor.system(),
+        {
+            "artifact_id": artifact_id,
+            "name": artifact_name,
+            "sha256": artifact_sha256,
+            "description": "hidden event payload " + "x" * 1_000,
+        },
+        subject_id=artifact_id,
+    )
+    experiment_id = "experiment_" + "e" * 100
+    experiment_event = log.append(
+        EventType.EXPERIMENT_COMPLETED,
+        Actor.system(),
+        {"experiment": {"id": experiment_id}, "details": "x" * 1_000},
+        subject_id=experiment_id,
+    )
+    tool_call_id = new_id("tool")
+    tool_event = log.append(
+        EventType.TOOL_COMPLETED,
+        Actor.system(),
+        {
+            "tool_call_id": tool_call_id,
+            "task_id": "task_" + "t" * 100,
+            "tool": "profile_dataset",
+            "status": "COMPLETED",
+            "result_sha256": "d" * 64,
+            "value": {"result": "x" * 1_000},
+        },
+        subject_id=tool_call_id,
+    )
+    audit_input = _input(log).model_copy(update={"artifact_names": ()})
+    response = _response()
+    finding = cast("list[dict[str, object]]", response["findings"])[0]
+    finding["evidence"] = [
+        {"kind": "artifact", "ref": artifact_id, "sha256": artifact_sha256},
+        {"kind": "artifact", "ref": artifact_name},
+        {"kind": "artifact", "ref": artifact_name, "sha256": artifact_sha256},
+        {"kind": "experiment", "ref": experiment_id},
+        {"kind": "tool_call", "ref": tool_call_id},
+    ]
+    provider = ScriptedProvider([response])
+    limits = EvidenceProjectionLimits(event_chars=200)
+
+    output = run_audit_agent(_spec(), audit_input, _context(log, provider=provider, limits=limits))
+
+    prompt = provider.calls[0]["prompt"]
+    projected = _mira_evidence_payload(prompt)
+    projected_events = [json.loads(item) for item in projected["events"]]
+    for source in (artifact_event, experiment_event, tool_event):
+        record = next(item for item in projected_events if item["seq"] == source.seq)
+        assert record["payload"] in (None, {})
+        assert record["payload_truncated"] is True
+        assert record["hash"] == source.hash
+    assert artifact_id not in prompt
+    assert artifact_name not in prompt
+    assert artifact_sha256 not in prompt
+    assert experiment_id not in prompt
+    assert tool_call_id not in prompt
+    assert output.findings[0].evidence == ()
+    completed = next(item for item in log.events() if item.type is EventType.AGENT_COMPLETED)
+    assert completed.payload["unbacked_evidence"] == [
+        {"kind": "artifact", "ref": artifact_id},
+        {"kind": "artifact", "ref": artifact_name},
+        {"kind": "artifact", "ref": artifact_name},
+        {"kind": "experiment", "ref": experiment_id},
+        {"kind": "tool_call", "ref": tool_call_id},
+    ]
+
+
+def test_compact_visible_event_fields_back_artifact_experiment_and_tool_references() -> None:
+    """A compact field can ground its own reference when it is delivered and history-backed."""
+    log = InMemoryEventLog(new_id("run"))
+    artifact_id = new_id("artifact")
+    artifact_name = "models/visible-baseline.joblib"
+    artifact_sha256 = "a" * 64
+    artifact_event = log.append(
+        EventType.ARTIFACT_CREATED,
+        Actor.system(),
+        {
+            "artifact_id": artifact_id,
+            "name": artifact_name,
+            "sha256": artifact_sha256,
+            "description": "oversized body " + "x" * 1_000,
+        },
+    )
+    experiment_id = new_id("experiment")
+    experiment_event = log.append(
+        EventType.EXPERIMENT_COMPLETED,
+        Actor.system(),
+        {"experiment": {"id": experiment_id}, "details": "x" * 1_000},
+    )
+    tool_call_id = new_id("tool")
+    tool_event = log.append(
+        EventType.TOOL_COMPLETED,
+        Actor.system(),
+        {
+            "tool_call_id": tool_call_id,
+            "task_id": new_id("task"),
+            "tool": "run_experiment",
+            "status": "COMPLETED",
+            "result_sha256": "b" * 64,
+            "value": {"result": "x" * 1_000},
+        },
+    )
+    response = _response()
+    finding = cast("list[dict[str, object]]", response["findings"])[0]
+    finding["evidence"] = [
+        {"kind": "artifact", "ref": artifact_id, "sha256": artifact_sha256},
+        {"kind": "artifact", "ref": artifact_name, "sha256": artifact_sha256},
+        {"kind": "experiment", "ref": experiment_id},
+        {"kind": "tool_call", "ref": tool_call_id},
+    ]
+    provider = ScriptedProvider([response])
+    limits = EvidenceProjectionLimits(event_chars=500)
+
+    output = run_audit_agent(_spec(), _input(log), _context(log, provider=provider, limits=limits))
+
+    prompt = provider.calls[0]["prompt"]
+    projected = _mira_evidence_payload(prompt)
+    records = {json.loads(item)["seq"]: json.loads(item) for item in projected["events"]}
+    assert records[artifact_event.seq]["payload"] == {
+        "artifact_id": artifact_id,
+        "name": artifact_name,
+        "sha256": artifact_sha256,
+    }
+    assert records[experiment_event.seq]["payload"] == {"experiment_id": experiment_id}
+    assert records[tool_event.seq]["payload"]["tool_call_id"] == tool_call_id
+    assert all(
+        records[event.seq]["payload_truncated"]
+        for event in (artifact_event, experiment_event, tool_event)
+    )
+    assert output.findings[0].evidence == (
+        Evidence(kind="artifact", ref=artifact_id, sha256=artifact_sha256),
+        Evidence(kind="artifact", ref=artifact_name, sha256=artifact_sha256),
+        Evidence(kind="experiment", ref=experiment_id),
+        Evidence(kind="tool_call", ref=tool_call_id),
+    )
+
+
+def test_declared_profile_context_hash_backs_event_when_profile_row_is_omitted() -> None:
+    """The profile hash remains citable when its complete identity pair is in scope context."""
+    log = InMemoryEventLog(new_id("run"))
+    profile = ActivityProfile(
+        id=new_id("profile"),
+        activity_id=new_id("activity"),
+        version=1,
+        run_id=log.run_id,
+        purpose="Offline research.",
+        affected_population="Historical records.",
+        decision_effect="No live decision effect.",
+        autonomy="Research use.",
+        human_oversight="A researcher reviews results.",
+        jurisdiction="Spain.",
+    )
+    profile_event = log.append(
+        EventType.ACTIVITY_PROFILE_RECORDED,
+        Actor.system(),
+        {"activity_profile": profile.model_dump(mode="json")},
+    )
+    response = _response()
+    finding = cast("list[dict[str, object]]", response["findings"])[0]
+    finding["evidence"] = [
+        {"kind": "event", "ref": f"seq:{profile_event.seq}", "sha256": profile_event.hash}
+    ]
+    provider = ScriptedProvider([response])
+    limits = EvidenceProjectionLimits(event_chars=100)
+
+    output = run_audit_agent(_spec(), _input(log), _context(log, provider=provider, limits=limits))
+
+    prompt = provider.calls[0]["prompt"]
+    projected = _mira_evidence_payload(prompt)
+    profile_context = projected["audit_context"]["activity_profile_is_declared_context"]
+    assert profile_context["event_seq"] == profile_event.seq
+    assert profile_context["event_hash"] == profile_event.hash
+    assert profile_event.seq not in {json.loads(item)["seq"] for item in projected["events"]}
+    assert output.findings[0].evidence == (
+        Evidence(kind="event", ref=f"seq:{profile_event.seq}", sha256=profile_event.hash),
+    )
+
+
+def test_context_sequence_without_hash_does_not_back_hashed_event_reference() -> None:
+    """Terminal seq-only context cannot reveal a hash omitted with the event row."""
+    log = InMemoryEventLog(new_id("run"))
+    terminal = log.append(EventType.RUN_COMPLETED, Actor.system(), {"status": "completed"})
+    response = _response()
+    finding = cast("list[dict[str, object]]", response["findings"])[0]
+    finding["evidence"] = [{"kind": "event", "ref": f"seq:{terminal.seq}", "sha256": terminal.hash}]
+    provider = ScriptedProvider([response])
+    limits = EvidenceProjectionLimits(event_chars=100)
+
+    output = run_audit_agent(_spec(), _input(log), _context(log, provider=provider, limits=limits))
+
+    prompt = provider.calls[0]["prompt"]
+    projected = _mira_evidence_payload(prompt)
+    assert terminal.seq in projected["audit_context"]["terminal_event_seqs"]
+    assert terminal.hash not in prompt
+    assert terminal.seq not in {json.loads(item)["seq"] for item in projected["events"]}
+    assert output.findings[0].evidence == ()
+    completed = next(item for item in log.events() if item.type is EventType.AGENT_COMPLETED)
+    assert completed.payload["unbacked_evidence"] == [
+        {"kind": "event", "ref": f"seq:{terminal.seq}"}
+    ]
+
+
+def test_projection_includes_recorded_human_approvals() -> None:
+    log = InMemoryEventLog(new_id("run"))
+    log.append(EventType.RUN_STARTED, Actor.system(), {"marker": "run started"})
+    log.append(
+        EventType.HUMAN_APPROVAL,
+        Actor.system(),
+        {"approved": True, "marker": "recorded human approval"},
+    )
+    provider = ScriptedProvider([_response()])
+
+    run_audit_agent(_spec(), _input(log), _context(log, provider=provider))
+
+    prompt = provider.calls[0]["prompt"]
+    assert "recorded human approval" in prompt
+
+
+def test_operational_context_precedes_large_excerpts_and_narratives() -> None:
+    log = InMemoryEventLog(new_id("run"))
+    log.append(EventType.RUN_STARTED, Actor.system(), {"status": "auditing"})
+    profile = ActivityProfile(
+        id=new_id("profile"),
+        activity_id=new_id("activity"),
+        version=1,
+        run_id=log.run_id,
+        purpose="Offline research with historical records.",
+        affected_population="Historical applicants.",
+        decision_effect="No effect on live applicants.",
+        autonomy="No deployment.",
+        human_oversight="A researcher reviews the results.",
+        jurisdiction="Spain and EU research context.",
+    )
+    log.append(
+        EventType.ACTIVITY_PROFILE_RECORDED,
+        Actor.system(),
+        {"activity_profile": profile.model_dump(mode="json")},
+    )
+    approvals = tuple(
+        log.append(
+            EventType.HUMAN_APPROVAL,
+            Actor.system(),
+            {"approved": True, "decision_marker": f"approval-{index}"},
+        )
+        for index in range(13)
+    )
+    for index in range(8):
+        log.append(
+            EventType.AGENT_MESSAGE,
+            Actor.system(),
+            {"text": f"large-narrative-{index}:" + "n" * 1_830},
+            surface=EventSurface.MODEL_VISIBLE,
+        )
+
+    artifacts = tuple(
+        Evidence(kind="artifact", ref=f"large-excerpt-{index}", sha256=f"{index + 1:064x}")
+        for index in range(2)
+    )
+    reader = _ExcerptReader(
+        {
+            evidence.ref: EvidenceExcerpt(
+                evidence=evidence,
+                expected_sha256=evidence.sha256 or "",
+                actual_sha256=evidence.sha256 or "",
+                text=f"large-excerpt-content-{index}:" + "e" * 1_800,
+                truncated=False,
+            )
+            for index, evidence in enumerate(artifacts)
+        }
+    )
+    response = _response()
+    findings = response["findings"]
+    assert isinstance(findings, list)
+    candidate = findings[0]
+    assert isinstance(candidate, dict)
+    candidate["evidence"] = [{"kind": "event", "ref": f"seq:{event.seq}"} for event in approvals]
+    provider = ScriptedProvider([response])
+    limits = EvidenceProjectionLimits(total_chars=12_000)
+
+    output = run_audit_agent(
+        _spec(),
+        _input(log, report=_report(log.run_id, evidence=artifacts)),
+        _context(log, provider=provider, evidence_reader=reader, limits=limits),
+    )
+
+    prompt = provider.calls[0]["prompt"]
+    assert len(prompt) <= limits.total_chars
+    assert '"audit_context"' in prompt
+    assert '"purpose":"Offline research with historical records."' in prompt
+    approval_refs = ",".join(str(event.seq) for event in approvals)
+    assert f'"recorded_human_approval_event_seqs":[{approval_refs}]' in prompt
+    assert "large-excerpt-content-0" in prompt
+    assert len(output.findings[0].evidence) == len(approvals)
+    assert output.findings[0].evidence == tuple(
+        Evidence(kind="event", ref=f"seq:{event.seq}") for event in approvals
+    )
+
+
+def test_runner_keeps_visible_event_citation_when_frame_escapes_angle_brackets() -> None:
+    log = InMemoryEventLog(new_id("run"))
+    visible = log.append(
+        EventType.RUN_STARTED,
+        Actor.system(),
+        {"notes": "measurement x < y"},
+    )
+    response = _response()
+    findings = response["findings"]
+    assert isinstance(findings, list)
+    candidate = findings[0]
+    assert isinstance(candidate, dict)
+    candidate["evidence"] = [{"kind": "event", "ref": f"seq:{visible.seq}"}]
+    provider = ScriptedProvider([response])
+
+    output = run_audit_agent(_spec(), _input(log), _context(log, provider=provider))
+
+    assert r"\u003c" in provider.calls[0]["prompt"]
+    assert output.findings[0].evidence == (Evidence(kind="event", ref=f"seq:{visible.seq}"),)
+
+
+def test_prior_findings_remain_visible_when_report_controls_exceed_report_cap() -> None:
+    log = InMemoryEventLog(new_id("run"))
+    prior = AuditFinding(
+        id=new_id("finding"),
+        run_id=log.run_id,
+        control_id="PRIOR-MODEL-CONCERN-TO-NOT-REPEAT",
+        framework=Framework.METHODOLOGY,
+        title="Prior model concern",
+        finding="The earlier candidate must remain visible to later discovery passes.",
+        severity=Severity.MEDIUM,
+        confidence=0.8,
+    )
+    controls = tuple(
+        ControlResult(
+            control_id=f"CONTROL-{index:02}",
+            title="Prior deterministic control result with a long report row",
+            status=ControlStatus.PASSED,
+            severity=Severity.LOW,
+            detail=(
+                "The report section is intentionally larger than its independent projection cap."
+            ),
+        )
+        for index in range(29)
+    )
+    report = AuditReport(
+        run_id=log.run_id,
+        status="passed_with_warnings",
+        controls=controls,
+        findings=(prior,),
+        audit_mode=AuditMode.IN_FLIGHT,
+    )
+    provider = ScriptedProvider([_response()])
+
+    run_audit_agent(
+        _spec(),
+        AuditInput.from_run(tuple(log.events()), report),
+        _context(log, provider=provider),
+    )
+
+    prompt = provider.calls[0]["prompt"]
+    assert "PRIOR-MODEL-CONCERN-TO-NOT-REPEAT" in prompt
+    assert "prior_candidate_findings_omitted" in prompt
+
+
+def test_projection_carries_in_flight_boundary_and_declared_activity_scope() -> None:
+    log = InMemoryEventLog(new_id("run"))
+    profile = ActivityProfile(
+        id=new_id("profile"),
+        activity_id=new_id("activity"),
+        version=1,
+        run_id=log.run_id,
+        purpose="Offline research only.",
+        affected_population="Historical applicants.",
+        decision_effect="No effect on a live applicant.",
+        autonomy="No deployment.",
+        human_oversight="A researcher reviews outputs.",
+        jurisdiction="Spain and EU research context.",
+    )
+    log.append(
+        EventType.ACTIVITY_PROFILE_RECORDED,
+        Actor.system(),
+        {"activity_profile": profile.model_dump(mode="json")},
+    )
+    report = _report(log.run_id).model_copy(update={"audit_mode": AuditMode.IN_FLIGHT})
+    audit_input = AuditInput.from_run(tuple(log.events()), report)
+    provider = ScriptedProvider([_response()])
+
+    run_audit_agent(_spec(), audit_input, _context(log, provider=provider))
+
+    prompt = provider.calls[0]["prompt"]
+    system = provider.calls[0]["system"]
+    assert '"audit_mode":"IN_FLIGHT"' in prompt
+    assert "Offline research only." in prompt
+    assert "Missing run.completed or run.failed" in system
+    assert "A positive compliance or assurance statement is not a finding" in system
+    assert "Do not infer legal applicability" in system
+
+
+def test_runner_strips_event_citations_the_agent_did_not_receive() -> None:
+    log = InMemoryEventLog(new_id("run"))
+    hidden = log.append(
+        EventType.ACTIVITY_PROFILE_QUESTIONED,
+        Actor.system(),
+        {"marker": "not part of the audit evidence projection"},
+    )
+    response = _response()
+    findings = response["findings"]
+    assert isinstance(findings, list)
+    candidate = findings[0]
+    assert isinstance(candidate, dict)
+    candidate["evidence"] = [{"kind": "event", "ref": f"seq:{hidden.seq}"}]
+    provider = ScriptedProvider([response])
+
+    output = run_audit_agent(_spec(), _input(log), _context(log, provider=provider))
+
+    assert output.findings[0].evidence == ()
+    completed = next(event for event in log.events() if event.type is EventType.AGENT_COMPLETED)
+    assert completed.payload["unbacked_evidence"] == [{"kind": "event", "ref": f"seq:{hidden.seq}"}]
+
+
 def test_projection_keeps_typed_events_when_old_messages_exceed_the_message_budget() -> None:
     log = InMemoryEventLog(new_id("run"))
     for index in range(9):
@@ -1339,6 +1853,134 @@ def test_hash_pinned_referenced_excerpt_reaches_the_model() -> None:
 
     assert reader.seen == [evidence]
     assert excerpt.text in provider.calls[0]["prompt"]
+
+
+def test_visible_hash_verified_excerpt_backs_artifact_without_exposing_its_event() -> None:
+    log = InMemoryEventLog(new_id("run"))
+    for _ in range(10):
+        log.append(EventType.MODEL_SELECTED, Actor.system(), {"details": "x" * 1_500})
+    artifact_sha256 = "a" * 64
+    hidden_event = log.append(
+        EventType.ARTIFACT_CREATED,
+        Actor.system(),
+        {
+            "name": "report.md",
+            "sha256": artifact_sha256,
+            "marker": "ARTIFACT-CREATED-EVENT-OUTSIDE-PROJECTION",
+        },
+    )
+    decision_id = "local-profile-decision"
+    call_id = "local-profile-call"
+    log.append(
+        EventType.POLICY_DECISION,
+        Actor.system(),
+        {
+            "id": decision_id,
+            "decision": "REQUIRE_HUMAN_REVIEW",
+            "rule_id": "TEST-REVIEW",
+            "reason": "P" * 1_450,
+        },
+    )
+    log.append(
+        EventType.HUMAN_APPROVAL_REQUESTED,
+        Actor.system(),
+        {"decision_id": decision_id, "summary": "Q" * 1_450},
+    )
+    log.append(
+        EventType.HUMAN_APPROVAL,
+        Actor.system(),
+        {
+            "policy_decision_id": decision_id,
+            "approved": True,
+            "authorization_context_sha256": "b" * 64,
+            "note": "R" * 1_350,
+        },
+    )
+    log.append(
+        EventType.TOOL_STARTED,
+        Actor.system(),
+        {
+            "tool_call_id": call_id,
+            "task_id": "local-profile-task",
+            "tool": "profile_dataset",
+            "decision_id": decision_id,
+            "arguments": {"dataset": "sample", "description": "S" * 2_500},
+        },
+    )
+    log.append(
+        EventType.TOOL_COMPLETED,
+        Actor.system(),
+        {
+            "tool_call_id": call_id,
+            "task_id": "local-profile-task",
+            "tool": "profile_dataset",
+            "status": "COMPLETED",
+            "result_sha256": "c" * 64,
+            "value": {"result": "T" * 5_000},
+        },
+    )
+    evidence = Evidence(kind="artifact", ref="report.md", sha256=artifact_sha256)
+    reader = _ExcerptReader(
+        {
+            evidence.ref: EvidenceExcerpt(
+                evidence=evidence,
+                expected_sha256=artifact_sha256,
+                actual_sha256=artifact_sha256,
+                text="VISIBLE-VERIFIED-ARTIFACT-CONTENT",
+                truncated=False,
+            )
+        }
+    )
+    response = _response()
+    findings = response["findings"]
+    assert isinstance(findings, list)
+    candidate = findings[0]
+    assert isinstance(candidate, dict)
+    candidate["evidence"] = [
+        {"kind": "artifact", "ref": evidence.ref, "sha256": evidence.sha256},
+        {"kind": "event", "ref": f"seq:{hidden_event.seq}"},
+    ]
+    provider = ScriptedProvider([response])
+    limits = EvidenceProjectionLimits(total_chars=8_000, report_chars=1_000)
+
+    output = run_audit_agent(
+        _spec(),
+        _input(log, report=_report(log.run_id, evidence=(evidence,))),
+        _context(log, provider=provider, evidence_reader=reader, limits=limits),
+    )
+
+    assert "VISIBLE-VERIFIED-ARTIFACT-CONTENT" in provider.calls[0]["prompt"]
+    assert len(provider.calls[0]["prompt"]) <= limits.total_chars
+    assert "ARTIFACT-CREATED-EVENT-OUTSIDE-PROJECTION" not in provider.calls[0]["prompt"]
+    projection = _mira_evidence_payload(provider.calls[0]["prompt"])
+    projected_events = [json.loads(value) for value in projection["events"]]
+    assert hidden_event.seq not in {event["seq"] for event in projected_events}
+    assert any(
+        event["type"] == EventType.TOOL_COMPLETED.value
+        and event["payload"].get("tool_call_id") == call_id
+        and event["hash"]
+        == next(item.hash for item in log.events() if item.type is EventType.TOOL_COMPLETED)
+        for event in projected_events
+    )
+    visible_seqs = {event["seq"] for event in projected_events}
+    linked_gate_events = [
+        item
+        for item in log.events()
+        if item.type
+        in {
+            EventType.POLICY_DECISION,
+            EventType.HUMAN_APPROVAL_REQUESTED,
+            EventType.HUMAN_APPROVAL,
+            EventType.TOOL_STARTED,
+            EventType.TOOL_COMPLETED,
+        }
+    ]
+    assert all(item.seq in visible_seqs for item in linked_gate_events)
+    assert output.findings[0].evidence == (evidence,)
+    completed = next(event for event in log.events() if event.type is EventType.AGENT_COMPLETED)
+    assert completed.payload["unbacked_evidence"] == [
+        {"kind": "event", "ref": f"seq:{hidden_event.seq}"}
+    ]
 
 
 def test_an_oversized_report_artifact_does_not_crash_the_audit_agent(tmp_path: Path) -> None:

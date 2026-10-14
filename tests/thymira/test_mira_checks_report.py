@@ -14,21 +14,32 @@ import pytest
 from pypdf import PdfWriter
 
 from tests.thymira.fixtures_tools import development_policy
+from thymira.agents.llm.scripted import ScriptedProvider
 from thymira.events import PDF_EXPORT_EXECUTION_VERSION, InMemoryEventLog
 from thymira.mira.checks import AuditContext, ControlStatus, audit_run
 from thymira.policies import Gate, PolicyEngine, RiskProfile
 from thymira.schemas import (
     Actor,
     ArtifactKind,
+    ConversationInput,
     EventType,
     Experiment,
     ExperimentStatus,
+    Run,
+    Task,
+    TaskStatus,
     new_id,
 )
 
 from thymira.state import LocalArtifactStore  # isort: skip
+from thymira.thy.agents.coding import CodeResult
+from thymira.thy.agents.data import DataProfile
+from thymira.thy.models import AgentTask, RegisteredDataset, ThyAgentKind, ThyPhase, ThyState
+from thymira.thy.nodes.summarize import summarize_node
 from thymira.tools import Tool, ToolContext, ToolInvocation, ToolManager, ToolRegistry
+from thymira.tools.builtins.data_analysis import ProfileDataset
 from thymira.tools.builtins.export_pdf import ExportPdf
+from thymira.tools.datasets import register_dataset
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -929,3 +940,128 @@ def test_a18_fails_an_unreadable_non_pdf_report_without_metrics_evidence(
     a18 = _control(report, "A18")
     assert a18.status is ControlStatus.FAILED
     assert "readable UTF-8" in a18.detail
+
+
+def test_a18_verifies_generated_eda_summary_against_registered_profile(tmp_path: Path) -> None:
+    run = Run(
+        id=new_id("run"),
+        project_id=new_id("project"),
+        session_id=new_id("session"),
+        prompt="Profile the sample dataset and summarize the result.",
+        conversation=ConversationInput(
+            ordinal=1, client_message_id="message-1", message="Profile the sample dataset."
+        ),
+    )
+    log = InMemoryEventLog(run.id)
+    store = LocalArtifactStore(tmp_path / "artifacts", run.id)
+    dataset_agent_id = new_id("agent")
+    dataset_path = tmp_path / "sample.csv"
+    dataset_path.write_text("label,age\nyes,24\n,31\nno,42\n", encoding="utf-8", newline="\n")
+    register_dataset(store, dataset_path, "sample", produced_by=dataset_agent_id)
+    ProfileDataset().execute(
+        ToolInvocation(run.id, dataset_agent_id, tmp_path, store),
+        {"dataset": "sample", "description": "Profile the registered sample dataset"},
+    )
+    profile_artifact = store.get("profile/sample.json")
+    assert profile_artifact is not None
+    plot_artifact = store.save_bytes(
+        "plots/missingness.png",
+        _TINY_PNG,
+        produced_by=new_id("agent"),
+        kind=ArtifactKind.OTHER,
+        media_type="image/png",
+    )
+    profile_output = DataProfile(
+        columns=("label", "age"),
+        dtypes={"age": "Int64", "label": "String"},
+        missing={"label": 1, "age": 0},
+        target_candidates=("label",),
+    )
+    profile_plan = AgentTask(
+        id="profile-sample",
+        agent=ThyAgentKind.DATA,
+        phase=ThyPhase.EXECUTE,
+        instruction="Profile the registered sample dataset",
+    )
+    profile_task = Task(
+        id=new_id("task"),
+        run_id=run.id,
+        agent_id=dataset_agent_id,
+        objective=profile_plan.instruction,
+        status=TaskStatus.COMPLETED,
+        summary=profile_output.model_dump_json(),
+    )
+    coding_agent_id = new_id("agent")
+    coding_plan = AgentTask(
+        id="plot-sample",
+        agent=ThyAgentKind.CODING,
+        phase=ThyPhase.EXECUTE,
+        instruction="Create a missingness plot",
+    )
+    coding_task = Task(
+        id=new_id("task"),
+        run_id=run.id,
+        agent_id=coding_agent_id,
+        objective=coding_plan.instruction,
+        status=TaskStatus.COMPLETED,
+        summary=CodeResult(
+            stdout='{"accuracy": 1.0}',
+            exit_code=0,
+            artifacts=(plot_artifact.name,),
+        ).model_dump_json(),
+    )
+    log.append(
+        EventType.TOOL_COMPLETED,
+        Actor(kind="tool", id="run_python", authenticated=True),
+        {"task_id": coding_task.id, "status": "FAILED", "error": "first execution failed"},
+    )
+    log.append(
+        EventType.TOOL_COMPLETED,
+        Actor(kind="tool", id="run_python", authenticated=True),
+        {"task_id": coding_task.id, "status": "COMPLETED", "error": None},
+    )
+    state = ThyState(
+        run=run,
+        phase=ThyPhase.SUMMARIZE,
+        completed=(profile_plan, coding_plan),
+        agent_messages=(profile_task, coding_task),
+        datasets=(RegisteredDataset(name="sample", target="label"),),
+        artifacts=tuple(item for item in (profile_artifact, plot_artifact) if item is not None),
+    )
+    provider = ScriptedProvider([])
+    final_state = ThyState.model_validate(summarize_node(store, log, provider=provider)(state))
+
+    assert final_state.summary is not None
+    assert "# Exploratory data analysis" in final_state.summary
+    assert "found missing entries in `label`" in final_state.summary
+    assert "treatment decision before modeling" in final_state.summary
+    assert "does not claim that cleaning or imputation was applied" in final_state.summary
+    assert "label" in final_state.summary
+    assert "profile/sample.json" in final_state.summary
+    assert "plots/missingness.png" in final_state.summary
+    assert "| label | String | 1 |" in final_state.summary
+    assert "| age | Int64 | 0 |" in final_state.summary
+    assert final_state.summary.index("| label | String | 1 |") < final_state.summary.index(
+        "| age | Int64 | 0 |"
+    )
+    assert '"accuracy": 1.0' not in final_state.summary
+    assert "required task work was subsequently verified as complete" in final_state.summary
+    assert provider.calls == []
+    assert store.verify() == []
+    audit = _audit(run.id, log, store)
+    assert _control(audit, "A18").status is ControlStatus.PASSED
+    assert _findings(audit, "A18") == []
+
+    tampered_profile = store.load_json("profile/sample.json")
+    tampered_profile["columns"]["label"]["null_count"] = 2
+    store.save_json(
+        "profile/sample.json",
+        tampered_profile,
+        produced_by=profile_artifact.produced_by,
+        kind=ArtifactKind.REPORT,
+        media_type="application/json",
+    )
+    tampered_audit = _audit(run.id, log, store)
+    tampered_a18 = _control(tampered_audit, "A18")
+    assert tampered_a18.status is ControlStatus.FAILED
+    assert "null_count" in tampered_a18.detail

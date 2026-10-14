@@ -261,6 +261,7 @@ class MiraAuditOrchestrator:
                 "manifest_sha256": artifact_manifest_sha256(store),
                 "activity_profile_id": snapshot.activity_profile.id,
                 "activity_profile_version": snapshot.activity_profile.version,
+                "audit_mode": snapshot.audit_mode,
             }
         )
 
@@ -444,7 +445,9 @@ def _audit_report(
 ) -> AuditReport:
     """Build the one aggregate report without trusting random identifiers from a sub-report."""
     failed = [control for control in controls if control.status is ControlStatus.FAILED]
-    if any(control.severity in (Severity.HIGH, Severity.CRITICAL) for control in failed):
+    if any(control.status is ControlStatus.NOT_EVALUATED for control in controls):
+        status = "incomplete"
+    elif any(control.severity in (Severity.HIGH, Severity.CRITICAL) for control in failed):
         status = "failed"
     elif failed or findings:
         status = "passed_with_warnings"

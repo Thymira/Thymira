@@ -16,13 +16,19 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from thymira.agents import LLMToolCall, ScriptedProvider
-from thymira.events import InMemoryEventLog, sha256_text
+from thymira.agents import LLMStructuredOutputError, LLMToolCall, ScriptedProvider
+from thymira.events import InMemoryEventLog, sha256_text, verify_events
 from thymira.mira.agents.loader import load_default_specs
 from thymira.mira.agents.runner import AuditAgentContext, run_audit_agent
 from thymira.mira.audit_io import AuditInput
 from thymira.mira.checks import AuditReport
-from thymira.mira.kb import LocalRegulationStore, RegulationChunk, RegulationSearchResult
+from thymira.mira.grounding import regulation_search_result
+from thymira.mira.kb import (
+    LocalRegulationStore,
+    RegulationChunk,
+    RegulationSearchResult,
+    load_default_regulation_store,
+)
 from thymira.mira.kb.ingest import load_seed_corpus, write_jsonl
 from thymira.mira.tools import SearchRegulation
 from thymira.policies import Gate, PolicyEngine, RiskProfile, auto_approve, load_policy_stack
@@ -36,7 +42,7 @@ from thymira.schemas import (
     new_id,
 )
 from thymira.state import LocalArtifactStore
-from thymira.tools import ToolContext, ToolRegistry
+from thymira.tools import ToolContext, ToolRegistry, tool_intent_sha256
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -308,3 +314,184 @@ def test_euaiact_run_with_recorded_approval_yields_no_finding(tmp_path: Path) ->
 
     assert output.agent_name == "euaiact"
     assert output.findings == ()
+
+
+@pytest.mark.parametrize("article", [11, 12, 14])
+def test_euaiact_article_number_search_satisfies_required_audit_evidence(
+    tmp_path: Path, article: int
+) -> None:
+    """The live failing query shapes complete the shipped audit runner against its real corpus."""
+    log = InMemoryEventLog(new_id("run"))
+    audit_input = AuditInput(run_id=log.run_id, events=(), report=_report(log.run_id))
+    agent_id = new_id("agent")
+    task_id = new_id("task")
+    tool = SearchRegulation(load_default_regulation_store())
+    provider = ScriptedProvider(
+        [
+            LLMToolCall(
+                id="call-search",
+                name="search_regulation",
+                arguments={"query": f"Article {article}", "framework": "EU_AI_ACT", "k": 5},
+            ),
+            LLMToolCall(id="call-output", name="final_result", arguments={"findings": []}),
+        ]
+    )
+    context = AuditAgentContext(
+        route_policy=TEST_ROUTE_POLICY,
+        event_log=log,
+        actor=Actor.system(),
+        agent_id=agent_id,
+        task_id=task_id,
+        provider=provider,
+        tool_registry=ToolRegistry((cast("Tool", tool),)),
+        tool_context=_tool_context(tmp_path, log=log, agent_id=agent_id, task_id=task_id),
+    )
+
+    output = run_audit_agent(_euaiact_spec(), audit_input, context)
+
+    assert output.agent_name == "euaiact"
+    assert output.findings == ()
+    completed = next(event for event in log.events() if event.type is EventType.TOOL_COMPLETED)
+    assert completed.payload["task_id"] == task_id
+    result, error = regulation_search_result(completed)
+    assert error is None
+    assert result is not None
+    assert result.matches
+    assert verify_events(log.events()).valid
+
+
+@pytest.mark.parametrize("include_framework", [False, True])
+def test_euaiact_unscoped_search_is_limited_to_its_declared_framework(
+    tmp_path: Path, include_framework: bool
+) -> None:
+    """A missing model filter must not return chunks from unrelated frameworks."""
+    log = InMemoryEventLog(new_id("run"))
+    audit_input = AuditInput(run_id=log.run_id, events=(), report=_report(log.run_id))
+    agent_id = new_id("agent")
+    task_id = new_id("task")
+    tool = SearchRegulation(load_default_regulation_store())
+    arguments: dict[str, object] = {
+        "query": "record-keeping and event logging",
+        "k": 5,
+    }
+    if include_framework:
+        arguments["framework"] = None
+    provider = ScriptedProvider(
+        [
+            LLMToolCall(
+                id="call-search",
+                name="search_regulation",
+                arguments=arguments,
+            ),
+            LLMToolCall(id="call-output", name="final_result", arguments={"findings": []}),
+        ]
+    )
+    context = AuditAgentContext(
+        route_policy=TEST_ROUTE_POLICY,
+        event_log=log,
+        actor=Actor.system(),
+        agent_id=agent_id,
+        task_id=task_id,
+        provider=provider,
+        tool_registry=ToolRegistry((cast("Tool", tool),)),
+        tool_context=_tool_context(tmp_path, log=log, agent_id=agent_id, task_id=task_id),
+    )
+
+    output = run_audit_agent(_euaiact_spec(), audit_input, context)
+
+    assert output.findings == ()
+    started = next(event for event in log.events() if event.type is EventType.TOOL_STARTED)
+    assert started.payload["arguments"]["framework"] == Framework.EU_AI_ACT.value
+    assert started.payload["tool_intent_sha256"] == tool_intent_sha256(
+        "search_regulation",
+        started.payload["arguments"],
+        sandbox_mode=tool.capability.sandbox_mode,
+    )
+    completed = next(event for event in log.events() if event.type is EventType.TOOL_COMPLETED)
+    result, error = regulation_search_result(completed)
+    assert error is None
+    assert result is not None
+    assert result.matches
+    assert {match.framework for match in result.matches} == {Framework.EU_AI_ACT}
+    assert "eu-ai-act-2024-art-12" in {match.source_id for match in result.matches}
+
+
+def test_euaiact_explicit_inapplicable_framework_remains_a_required_tool_failure(
+    tmp_path: Path,
+) -> None:
+    """An explicit wrong framework stays visible and the independent validator rejects it."""
+    log = InMemoryEventLog(new_id("run"))
+    audit_input = AuditInput(run_id=log.run_id, events=(), report=_report(log.run_id))
+    agent_id = new_id("agent")
+    task_id = new_id("task")
+    tool = SearchRegulation(load_default_regulation_store())
+    provider = ScriptedProvider(
+        [
+            LLMToolCall(
+                id="call-search",
+                name="search_regulation",
+                arguments={"query": "human oversight", "framework": "GDPR", "k": 5},
+            ),
+            LLMToolCall(id="call-output", name="final_result", arguments={"findings": []}),
+        ]
+    )
+    context = AuditAgentContext(
+        route_policy=TEST_ROUTE_POLICY,
+        event_log=log,
+        actor=Actor.system(),
+        agent_id=agent_id,
+        task_id=task_id,
+        provider=provider,
+        tool_registry=ToolRegistry((cast("Tool", tool),)),
+        tool_context=_tool_context(tmp_path, log=log, agent_id=agent_id, task_id=task_id),
+    )
+
+    with pytest.raises(
+        LLMStructuredOutputError,
+        match=r"expected one of \[EU_AI_ACT\], got \[GDPR\]",
+    ):
+        run_audit_agent(_euaiact_spec(), audit_input, context)
+
+    started = next(event for event in log.events() if event.type is EventType.TOOL_STARTED)
+    assert started.payload["arguments"]["framework"] == Framework.GDPR.value
+
+
+def test_optional_regulation_search_remains_unscoped(tmp_path: Path) -> None:
+    """An optional broad lookup keeps the generic store behaviour."""
+    log = InMemoryEventLog(new_id("run"))
+    audit_input = AuditInput(run_id=log.run_id, events=(), report=_report(log.run_id))
+    agent_id = new_id("agent")
+    task_id = new_id("task")
+    tool = SearchRegulation(load_default_regulation_store())
+    provider = ScriptedProvider(
+        [
+            LLMToolCall(
+                id="call-search",
+                name="search_regulation",
+                arguments={"query": "record-keeping and event logging", "k": 5},
+            ),
+            LLMToolCall(id="call-output", name="final_result", arguments={"findings": []}),
+        ]
+    )
+    context = AuditAgentContext(
+        route_policy=TEST_ROUTE_POLICY,
+        event_log=log,
+        actor=Actor.system(),
+        agent_id=agent_id,
+        task_id=task_id,
+        provider=provider,
+        tool_registry=ToolRegistry((cast("Tool", tool),)),
+        tool_context=_tool_context(tmp_path, log=log, agent_id=agent_id, task_id=task_id),
+    )
+    optional_spec = _euaiact_spec().model_copy(update={"required_tool_calls": ()})
+
+    output = run_audit_agent(optional_spec, audit_input, context)
+
+    assert output.findings == ()
+    started = next(event for event in log.events() if event.type is EventType.TOOL_STARTED)
+    assert started.payload["arguments"]["framework"] is None
+    completed = next(event for event in log.events() if event.type is EventType.TOOL_COMPLETED)
+    result, error = regulation_search_result(completed)
+    assert error is None
+    assert result is not None
+    assert {match.framework for match in result.matches} > {Framework.EU_AI_ACT}

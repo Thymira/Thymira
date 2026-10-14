@@ -49,8 +49,9 @@ or preflight `audit.started` event cannot waive review. Compositions using MIRA 
 this constraint must provide these Core lifecycle records; absent evidence keeps review active.
 
 `GOV-01` provides MIRA's frozen audit-agent boundary. `AuditInput.from_run()` derives one Run id
-from explicit event/report evidence and exposes only artifact, experiment, and framework facts
-recorded by events. `AuditAgentSpec` declarations load from YAML in deterministic file order with
+from explicit event/report evidence and exposes artifact, experiment, framework and latest validated
+activity-profile facts recorded by events, along with the report's audit boundary.
+`AuditAgentSpec` declarations load from YAML in deterministic file order with
 duplicate-name and value validation. `AuditAgentOutput.from_spec()` validates every finding
 against the spec's declared framework without adding a redundant persisted framework field.
 
@@ -62,8 +63,19 @@ hash-pinned excerpts cited by that report; it redacts and deterministically trun
 The runner emits `agent.started`/`agent.completed` and returns candidates only, leaving finding
 persistence, deduplication, and the single Gate review to MIRA-01.
 
+The bounded projection includes the declared activity scope and recorded approval references.
+It places this operational context and verified excerpts ahead of narrative messages under the
+same total budget; alphabetical top-level ordering must not let narratives hide the audit facts.
+Neither declarations nor tool approvals establish a legal exemption or complete consequential
+human oversight. Code-owned instructions distinguish an in-flight audit from terminal closeout,
+adverse findings from positive compliance statements, and actual model-feature use from a column's
+mere presence in a dataset. Discovery rounds receive previously proposed candidates to avoid
+repeated claims; the independent critic retains the original evidence snapshot and deterministic
+report. These changes do not lower findings or bypass the Policy Engine.
+
 A finding's `evidence` tuple is authored by the model, so `thymira.mira.grounding` resolves every
-reference against the Run's own event log before it can become a citation, and `MiraAuditFlow`
+reference against the Run events actually exposed by its final bounded prompt before it can become
+a citation, and `MiraAuditFlow`
 repeats that resolution on producer output so an injected runner cannot bypass it. An unbacked
 reference is stripped and the refusal recorded on `agent.completed`; the finding survives for the
 Policy Engine to weigh. The one thing the log cannot confirm is the exact knowledge-base chunk
@@ -93,6 +105,18 @@ adapter around the same flow and leaves its production `Gate` to the composition
 so one Run never gets two findings decisions. The flow uses an injected `EventLog`, keeps the
 optional `ArtifactStore` read-only, and never receives `LocalRunStore`, `RunController`, or
 runner/tool dependencies directly.
+
+The provider-backed finding verifier receives the report's `IN_FLIGHT` or `FINAL` boundary, the
+exact current activity-profile record, relevant preflight context, and full approval chains linked
+to cited actions. `AuditReport.applicability_assessments` records a separate assessment for each
+agent candidate, including candidates later dropped by the supported/refuted verifier. Each
+assessment binds the finding and control to the activity-profile ID and version, audit mode, and
+snapshot head sequence and hash. The judgment is `applicable`, `not_applicable`, or `undetermined`;
+missing, stale, or contradictory scope evidence leaves it `undetermined`. Typed model-training
+events take priority over generic recent narrative. The field defaults to an empty tuple and is
+omitted from serialized reports when empty, so legacy report JSON remains valid. Applicability does
+not change the finding's supported result, retention, severity, report status, Policy Engine result,
+or Gate decision.
 
 Project configuration declares the governance frameworks for every Run. `MiraAuditFlow` uses that
 same declaration for A26 requirements coverage and to select the applicable audit-agent specs; a

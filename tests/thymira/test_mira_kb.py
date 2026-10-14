@@ -130,6 +130,27 @@ def test_local_store_loads_hash_verified_chunks(regulation_path: Path) -> None:
     assert all(sha256_text(chunk.fragment) == chunk.sha256 for chunk in chunks)
 
 
+@pytest.mark.parametrize(
+    ("query", "source_id"),
+    [
+        ("Article 11", "eu-ai-act-2024-art-11"),
+        ("Article 12", "eu-ai-act-2024-art-12"),
+        ("Article 14", "eu-ai-act-2024-art-14"),
+    ],
+)
+def test_packaged_search_tool_finds_article_locations(
+    query: str, source_id: str, tmp_path: Path
+) -> None:
+    execution = ToolManager(build_mira_tool_registry(load_default_regulation_store())).execute(
+        _tool_context(tmp_path),
+        "search_regulation",
+        {"query": query, "framework": Framework.EU_AI_ACT, "k": 5},
+    )
+
+    assert execution.result.success is True
+    assert source_id in {match["source_id"] for match in json.loads(execution.result.stdout)}
+
+
 def test_local_store_reports_path_and_line_for_invalid_json(tmp_path: Path) -> None:
     path = tmp_path / "regulation.jsonl"
     valid = _record("valid", Framework.EU_AI_ACT, "Article 1", "Valid text.")
@@ -287,6 +308,19 @@ def test_search_tool_registers_and_executes_through_tool_manager(
     assert [event.type for event in events].count(EventType.TOOL_COMPLETED) == 1
     completed = next(event for event in events if event.type is EventType.TOOL_COMPLETED)
     assert completed.payload["result_sha256"] == execution.call.result_sha256
+
+
+def test_direct_search_without_an_agent_scope_remains_unscoped(tmp_path: Path) -> None:
+    """The generic MIRA registry still searches across frameworks when no scope is supplied."""
+    execution = ToolManager(build_mira_tool_registry(load_default_regulation_store())).execute(
+        _tool_context(tmp_path),
+        "search_regulation",
+        {"query": "human", "k": 10},
+    )
+
+    assert execution.result.success is True
+    matches = json.loads(execution.result.stdout)
+    assert {match["framework"] for match in matches} >= {"EU_AI_ACT", "GDPR"}
 
 
 def test_mira_registry_is_explicit_and_binds_the_configured_store(
@@ -475,3 +509,24 @@ def test_regulation_chunk_from_text_digests_its_own_text() -> None:
 
     assert verifies_sha256(chunk)
     assert chunk.sha256 == sha256_text("Data minimisation.")
+
+
+def test_article_lookup_does_not_substitute_unrelated_articles() -> None:
+    store = load_default_regulation_store()
+
+    assert store.search("Article 999", framework=Framework.EU_AI_ACT, k=5) == ()
+    results = store.search("Article 12", framework=Framework.EU_AI_ACT, k=5)
+    assert results
+    assert all("Article 12" in result.location for result in results)
+
+
+def test_article_lookup_does_not_treat_cross_references_as_article_evidence(tmp_path: Path) -> None:
+    path = _write_jsonl(
+        tmp_path / "regulation.jsonl",
+        [
+            _record("eu-11", Framework.EU_AI_ACT, "Article 11", "See Article 14 for oversight."),
+            _record("eu-14", Framework.EU_AI_ACT, "Article 14", "Human oversight requirements."),
+        ],
+    )
+    results = LocalRegulationStore(path).search("Article 14", framework=Framework.EU_AI_ACT, k=5)
+    assert [result.source_id for result in results] == ["eu-14"]

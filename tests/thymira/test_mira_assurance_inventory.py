@@ -12,7 +12,12 @@ from __future__ import annotations
 import pytest
 
 from thymira.events import InMemoryEventLog, canonical_json
-from thymira.mira import AssuranceBundle, assemble_run_assurance, build_assurance
+from thymira.mira import (
+    AssuranceBundle,
+    assemble_run_assurance,
+    build_assurance,
+    verify_assurance_bundle,
+)
 from thymira.mira.assurance import latest_audit_report, latest_findings_decision
 from thymira.mira.checks import AuditReport
 from thymira.schemas import (
@@ -207,6 +212,21 @@ def test_assemble_derives_every_index_from_the_recorded_evidence(recorded: _Reco
     assert bundle.event_head_hash == recorded.events[-1].hash
     assert bundle.terminal_hash == recorded.report.terminal_hash
     assert bundle.bundle_sha256 is not None
+
+
+def test_legacy_final_report_serialization_keeps_assurance_digest_verifiable(
+    recorded: _Recorded,
+) -> None:
+    """A report written before audit_mode existed keeps its exact persisted representation."""
+    raw_report = recorded.events[-1].payload["audit_report"]
+    assert isinstance(raw_report, dict)
+    assert "audit_mode" not in raw_report
+
+    bundle = recorded.bundle()
+
+    assert bundle.report.audit_mode.value == "FINAL"
+    assert "audit_mode" not in bundle.model_dump(mode="json")["report"]
+    assert verify_assurance_bundle(bundle).valid
 
 
 def test_assemble_returns_nothing_without_an_audit_report() -> None:

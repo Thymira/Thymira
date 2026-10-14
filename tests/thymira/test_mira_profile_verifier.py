@@ -377,6 +377,50 @@ def test_profile_verifier_handles_empty_constant_and_nonfinite_numeric_values(
     assert status is ControlStatus.PASSED, detail
 
 
+def test_profile_verifier_accepts_null_for_an_undefined_recomputed_correlation(
+    tmp_path: Path,
+) -> None:
+    frame = pl.DataFrame({"constant": [3.0, 3.0, 3.0], "varying": [1.0, 2.0, 3.0]})
+    _store, payload = _profile(tmp_path, frame)
+
+    assert payload["correlation"]["constant"][0] is None
+    status, detail = _outcome(_store)
+
+    assert status is ControlStatus.PASSED, detail
+
+
+@pytest.mark.parametrize("claim", [0.0, 1.0, True, float("nan")])
+def test_profile_verifier_rejects_non_null_claims_for_undefined_correlation(
+    tmp_path: Path, claim: object
+) -> None:
+    frame = pl.DataFrame({"constant": [3.0, 3.0, 3.0], "varying": [1.0, 2.0, 3.0]})
+    store, payload = _profile(tmp_path, frame)
+    payload["correlation"]["constant"][0] = claim
+    _replace_profile(store, payload)
+
+    status, detail = _outcome(store)
+
+    assert status is ControlStatus.FAILED
+    assert "correlation/constant/0" in detail
+
+
+@pytest.mark.parametrize("claim", [None, float("inf"), True, 0.5])
+def test_profile_verifier_rejects_invalid_claims_for_finite_correlation(
+    tmp_path: Path, claim: object
+) -> None:
+    store, payload = _profile(
+        tmp_path,
+        pl.DataFrame({"left": [1.0, 2.0, 3.0], "right": [2.0, 4.0, 6.0]}),
+    )
+    payload["correlation"]["left"][1] = claim
+    _replace_profile(store, payload)
+
+    status, detail = _outcome(store)
+
+    assert status is ControlStatus.FAILED
+    assert "correlation/left/1" in detail
+
+
 def test_profile_verifier_handles_an_empty_numeric_parquet_dataset(tmp_path: Path) -> None:
     frame = pl.DataFrame(schema={"left": pl.Float64, "right": pl.Int64, "label": pl.String})
     store, _ = _profile(tmp_path, frame, suffix=".parquet")

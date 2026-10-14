@@ -15,8 +15,17 @@ from tests.thymira.test_tools import _context as _manager_context
 from tests.thymira.test_tools import _FakeTool as _RegisteredFakeTool
 from thymira.core import MiraControlPlane, RunController, RunEventLog, RunTransitionKind
 from thymira.events import InMemoryEventLog, read_events
-from thymira.mira.checks import AuditContext, AuditMode, ControlStatus, audit_run, controls
+from thymira.mira.checks import (
+    AuditContext,
+    AuditMode,
+    AuditReport,
+    ControlResult,
+    ControlStatus,
+    audit_run,
+    controls,
+)
 from thymira.mira.checks.controls import a3_authorization_before_tool, a6_denials_recorded
+from thymira.mira.orchestrator import _audit_report
 from thymira.policies import (
     ActionRule,
     BudgetRule,
@@ -189,6 +198,7 @@ def test_in_flight_audit_excludes_controls_that_require_run_close() -> None:
 
     control_ids = {control.control_id for control in report.controls}
     assert {"A2", "A7", "A8"}.isdisjoint(control_ids)
+    assert report.audit_mode is AuditMode.IN_FLIGHT
 
 
 def test_a2_fails_for_an_open_final_audit() -> None:
@@ -301,7 +311,39 @@ def test_broken_chain_stops_evaluation_and_pending_approval_fails(tmp_path: Path
     statuses = {c.control_id: c.status for c in broken.controls}
     assert statuses["A1"] is ControlStatus.FAILED
     assert statuses["A7"] is ControlStatus.NOT_EVALUATED
-    assert broken.status == "failed"
+    assert broken.status == "incomplete"
+    assert any(finding.control_id == "A1" for finding in broken.findings)
+
+
+def test_aggregate_report_marks_not_evaluated_control_incomplete() -> None:
+    """The aggregate preserves failed controls but does not claim full audit coverage."""
+    deterministic = AuditReport(
+        run_id="run_incomplete",
+        status="passed",
+        controls=(),
+    )
+    not_evaluated = ControlResult(
+        control_id="A17",
+        title="Provenance",
+        status=ControlStatus.NOT_EVALUATED,
+        severity=Severity.CRITICAL,
+        detail="The evidence could not be evaluated.",
+    )
+    high_failure = ControlResult(
+        control_id="A1",
+        title="Event chain",
+        status=ControlStatus.FAILED,
+        severity=Severity.CRITICAL,
+        detail="The event chain is invalid.",
+    )
+
+    report = _audit_report("run_incomplete", deterministic, (high_failure, not_evaluated), ())
+
+    assert report.status == "incomplete"
+    assert {control.control_id: control.status for control in report.controls} == {
+        "A1": ControlStatus.FAILED,
+        "A17": ControlStatus.NOT_EVALUATED,
+    }
 
 
 def test_artifact_tampering_is_detected(tmp_path: Path) -> None:

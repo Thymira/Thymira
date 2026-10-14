@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import Field
 
+from thymira.mira.checks.models import ApplicabilityJudgment
 from thymira.mira.finding_safety import safe_finding
 from thymira.schemas import AuditFinding, Severity, ThymiraModel
 
@@ -40,8 +41,9 @@ if TYPE_CHECKING:
 class FindingVerdict(ThymiraModel):
     """A second-pass judge's ruling on one candidate finding."""
 
-    supported: bool
+    supported: bool | None
     rationale: str = Field(default="")
+    applicability: ApplicabilityJudgment = Field(default_factory=ApplicabilityJudgment)
 
 
 #: A second-pass judge: given a candidate finding and the immutable audit evidence, decide whether
@@ -97,12 +99,39 @@ class VerificationDrop:
 
 
 @dataclass(frozen=True, slots=True)
+class VerificationUnavailable:
+    """One candidate kept because the verifier could not make a grounded ruling."""
+
+    finding: AuditFinding
+    rationale: str
+
+
+@dataclass(frozen=True, slots=True)
+class VerificationSupported:
+    """One retained candidate with an explicit positive verifier ruling."""
+
+    finding: AuditFinding
+    rationale: str
+
+
+@dataclass(frozen=True, slots=True)
+class FindingVerificationRecord:
+    """The full separate verdicts for one agent candidate, even when it is dropped."""
+
+    finding: AuditFinding
+    verdict: FindingVerdict
+
+
+@dataclass(frozen=True, slots=True)
 class VerificationOutcome:
     """The candidate findings a verification pass kept and the agent findings it dropped."""
 
     kept: tuple[AuditFinding, ...]
     dropped: tuple[AuditFinding, ...]
     drop_records: tuple[VerificationDrop, ...] = ()
+    unavailable_records: tuple[VerificationUnavailable, ...] = ()
+    supported_records: tuple[VerificationSupported, ...] = ()
+    judgments: tuple[FindingVerificationRecord, ...] = ()
 
 
 def finding_dedup_key(finding: AuditFinding) -> tuple[str, str, tuple[str, ...]]:
@@ -132,26 +161,54 @@ def verify_candidate_findings(
     events: tuple[Event, ...],
     report: AuditReport,
 ) -> VerificationOutcome:
-    """Drop unsupported agent-authored candidates; keep every code-authored finding unconditionally.
+    """Keep agent-authored candidates according to the verifier's recorded tri-state result.
 
-    With no verifier the outcome is a pass-through (the MVP identity). Otherwise each candidate
-    whose ``agent_id`` is set is judged; a finding the judge does not support is dropped and never
-    reaches the Policy Engine. Findings with no ``agent_id`` -- deterministic and preflight
-    controls -- are always kept, because an LLM judge may not suppress a code-authored finding.
+    With no verifier the outcome is a pass-through (the MVP identity), so no positive verdict is
+    recorded. Otherwise each candidate whose ``agent_id`` is set is judged: ``False`` drops the
+    finding, ``None`` retains it with verification unavailable, and ``True`` retains it as
+    supported. Findings with no ``agent_id`` -- deterministic and preflight controls -- are always
+    kept without an LLM verdict, because a judge may not suppress or validate a code-authored
+    finding.
     """
     if verify is None:
-        return VerificationOutcome(kept=tuple(candidates), dropped=())
+        return VerificationOutcome(
+            kept=tuple(candidates),
+            dropped=(),
+            judgments=tuple(
+                FindingVerificationRecord(
+                    finding=candidate,
+                    verdict=FindingVerdict(
+                        supported=None,
+                        rationale="No finding verifier is configured for this candidate.",
+                    ),
+                )
+                for candidate in candidates
+                if candidate.agent_id is not None
+            ),
+        )
     kept: list[AuditFinding] = []
     dropped: list[AuditFinding] = []
     drop_records: list[VerificationDrop] = []
+    unavailable_records: list[VerificationUnavailable] = []
+    supported_records: list[VerificationSupported] = []
+    judgments: list[FindingVerificationRecord] = []
     for candidate in candidates:
         finding = safe_finding(candidate)
         if finding.agent_id is None:
             kept.append(finding)
             continue
         verdict = verify(finding, events, report)
-        if verdict.supported:
+        judgments.append(FindingVerificationRecord(finding=finding, verdict=verdict))
+        if verdict.supported is None:
             kept.append(finding)
+            unavailable_records.append(
+                VerificationUnavailable(finding=finding, rationale=verdict.rationale)
+            )
+        elif verdict.supported:
+            kept.append(finding)
+            supported_records.append(
+                VerificationSupported(finding=finding, rationale=verdict.rationale)
+            )
         else:
             dropped.append(finding)
             drop_records.append(VerificationDrop(finding=finding, rationale=verdict.rationale))
@@ -159,16 +216,22 @@ def verify_candidate_findings(
         kept=tuple(kept),
         dropped=tuple(dropped),
         drop_records=tuple(drop_records),
+        unavailable_records=tuple(unavailable_records),
+        supported_records=tuple(supported_records),
+        judgments=tuple(judgments),
     )
 
 
 __all__ = [
     "DiscoveryLimits",
     "FindingVerdict",
+    "FindingVerificationRecord",
     "FindingVerifier",
     "IndependentAuditEvidence",
     "VerificationDrop",
     "VerificationOutcome",
+    "VerificationSupported",
+    "VerificationUnavailable",
     "finding_dedup_key",
     "verify_candidate_findings",
 ]

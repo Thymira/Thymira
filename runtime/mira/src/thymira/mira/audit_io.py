@@ -7,9 +7,10 @@ from typing import TYPE_CHECKING, Self
 from pydantic import Field
 
 from thymira.agents.llm.routing import ModelChoice
-from thymira.mira.checks import AuditReport
+from thymira.events import canonical_json
+from thymira.mira.checks import AuditMode, AuditReport
 from thymira.mira.finding_safety import safe_finding
-from thymira.schemas import AuditFinding, Event, EventType, Framework, ThymiraModel
+from thymira.schemas import ActivityProfile, AuditFinding, Event, EventType, Framework, ThymiraModel
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
@@ -23,6 +24,9 @@ class AuditInput(ThymiraModel):
     run_id: str = Field(min_length=1)
     events: tuple[Event, ...] = ()
     report: AuditReport | None = None
+    audit_mode: AuditMode = AuditMode.FINAL
+    activity_profile: ActivityProfile | None = None
+    activity_profile_event_seq: int | None = None
     artifact_names: tuple[str, ...] = ()
     experiment_ids: tuple[str, ...] = ()
     frameworks: tuple[Framework, ...] = ()
@@ -52,10 +56,36 @@ class AuditInput(ThymiraModel):
         if run_id is None:
             raise ValueError("cannot derive audit run_id without events or a report")
 
+        profile_event = next(
+            (
+                event
+                for event in reversed(event_tuple)
+                if event.type is EventType.ACTIVITY_PROFILE_RECORDED
+            ),
+            None,
+        )
+        profile = None
+        if profile_event is not None:
+            try:
+                profile = ActivityProfile.model_validate_json(
+                    canonical_json(profile_event.payload["activity_profile"])
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"event seq {profile_event.seq} has an invalid activity profile"
+                ) from exc
+            if profile.run_id != run_id:
+                raise ValueError(
+                    f"event seq {profile_event.seq} activity profile belongs to another Run"
+                )
+
         return cls(
             run_id=run_id,
             events=event_tuple,
             report=report,
+            audit_mode=report.audit_mode if report is not None else AuditMode.FINAL,
+            activity_profile=profile,
+            activity_profile_event_seq=(profile_event.seq if profile_event is not None else None),
             artifact_names=_artifact_names(event_tuple),
             experiment_ids=_experiment_ids(event_tuple),
             frameworks=_frameworks(event_tuple),

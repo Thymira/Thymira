@@ -26,8 +26,8 @@ from pydantic_ai.usage import UsageLimits
 from thymira.agents.llm.base import LLMStructuredOutputError
 from thymira.agents.llm.routing import Role
 from thymira.agents.model_binding import routed_model
-from thymira.agents.prompt_framing import frame_untrusted
-from thymira.events import canonical_json, current_surface, redact_value
+from thymira.agents.prompt_framing import frame_overhead, frame_untrusted
+from thymira.events import canonical_json, current_surface, redact_value, scrub_credentials_value
 from thymira.mira.agents.runner import (
     build_audit_tools,
     runtime_skill_event_payload,
@@ -50,6 +50,7 @@ if TYPE_CHECKING:
     from thymira.mira.agents.spec import AuditAgentSpec
     from thymira.mira.audit_io import AuditInput
     from thymira.mira.kb import RegulationChunk
+    from thymira.schemas import Event
 
 _MAX_PROJECTION_CHARS = 12_000
 
@@ -114,6 +115,21 @@ class RegulatoryEvidenceResult:
     dropped_citations: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class _RegulatoryProjection:
+    """Complete candidates, sources and Run records actually visible to the enricher."""
+
+    prompt: str | None
+    visible_finding_ids: frozenset[str]
+    visible_source_ids: frozenset[str]
+    visible_event_seqs: frozenset[int]
+    visible_artifact_refs: frozenset[str]
+    visible_experiment_ids: frozenset[str]
+    omitted_finding_count: int
+    omitted_source_count: int
+    omitted_event_count: int
+
+
 class _ProposedCitation(ThymiraModel):
     """One citation a model proposes: a ``source_id`` and, at most, the run ref it concerns.
 
@@ -156,19 +172,29 @@ def enrich_findings(
     if any(finding.run_id != audit_input.run_id for finding in findings):
         raise ValueError("every finding to enrich must belong to the audited run")
 
-    proposals = _propose_citations(spec, audit_input, tuple(findings), index, context)
-    return _resolve_proposals(tuple(findings), proposals, index, audit_input)
+    candidates = tuple(findings)
+    projection = _build_proposal_projection(audit_input, candidates, index)
+    if (
+        projection.prompt is None
+        or not projection.visible_finding_ids
+        or not projection.visible_source_ids
+    ):
+        _record_skipped_projection(spec, context, projection)
+        proposals: tuple[_ProposedCitation, ...] = ()
+    else:
+        proposals = _propose_citations(spec, projection, context)
+    return _resolve_proposals(candidates, proposals, index, audit_input, projection)
 
 
 def _propose_citations(
     spec: AuditAgentSpec,
-    audit_input: AuditInput,
-    findings: tuple[AuditFinding, ...],
-    index: CitationIndex,
+    projection: _RegulatoryProjection,
     context: AuditAgentContext,
 ) -> tuple[_ProposedCitation, ...]:
     """Run the agent once and return its raw, still-unresolved citation proposals."""
-    prompt = _build_proposal_projection(audit_input, findings, index)
+    prompt = projection.prompt
+    if prompt is None:
+        raise RuntimeError("MIRA regulatory evidence projection is unavailable")
     instructions = runtime_skill_instructions(spec, context)
     runtime_evidence = runtime_skill_event_payload(context)
     task_kind = spec.task_kinds[0]
@@ -205,6 +231,7 @@ def _propose_citations(
             "agent_id": context.agent_id,
             "task_id": context.task_id,
             "framework": spec.framework.value,
+            **_omission_payload(projection),
         },
         subject_id=context.agent_id,
         producer="thymira.mira",
@@ -221,6 +248,7 @@ def _propose_citations(
                 "task_id": context.task_id,
                 "status": TaskStatus.FAILED.value,
                 "max_turns": spec.max_turns,
+                **_omission_payload(projection),
             },
             subject_id=context.agent_id,
             producer="thymira.mira",
@@ -236,6 +264,7 @@ def _propose_citations(
             "agent_id": context.agent_id,
             "task_id": context.task_id,
             "status": TaskStatus.COMPLETED.value,
+            **_omission_payload(projection),
         },
         subject_id=context.agent_id,
         producer="thymira.mira",
@@ -248,6 +277,7 @@ def _resolve_proposals(
     proposals: tuple[_ProposedCitation, ...],
     index: CitationIndex,
     audit_input: AuditInput,
+    projection: _RegulatoryProjection,
 ) -> RegulatoryEvidenceResult:
     """Resolve every proposal against the knowledge base, dropping the citations it cannot back."""
     valid_ids = {finding.id for finding in findings}
@@ -262,6 +292,12 @@ def _resolve_proposals(
     for finding in findings:
         added: list[Evidence] = []
         for citation in by_finding.get(finding.id, ()):
+            if (
+                finding.id not in projection.visible_finding_ids
+                or citation.source_id not in projection.visible_source_ids
+            ):
+                dropped.append(citation.source_id)
+                continue
             external = index.resolve(citation.source_id)
             if external is None:
                 dropped.append(citation.source_id)
@@ -270,7 +306,7 @@ def _resolve_proposals(
             # evidence by quoting caller-controlled text. Keep only the index-owned reference and
             # digest; findings can cite the source without copying raw notes into the report.
             added.append(external)
-            concerns = _concerns_evidence(citation, audit_input)
+            concerns = _concerns_evidence(citation, audit_input, projection)
             if concerns is not None:
                 added.append(concerns)
         if added:
@@ -287,17 +323,28 @@ def _resolve_proposals(
     )
 
 
-def _concerns_evidence(citation: _ProposedCitation, audit_input: AuditInput) -> Evidence | None:
-    """Return the run ref the finding concerns only when it exists in the audited Run."""
+def _concerns_evidence(
+    citation: _ProposedCitation,
+    audit_input: AuditInput,
+    projection: _RegulatoryProjection,
+) -> Evidence | None:
+    """Return only Run references whose complete identity record was visible to the model."""
     kind = citation.concerns_kind
     ref = citation.concerns_ref
     if kind is None or ref is None:
         return None
-    if kind == "event" and ref in {f"seq:{event.seq}" for event in audit_input.events}:
+    if (
+        kind == "event"
+        and ref in {f"seq:{seq}" for seq in projection.visible_event_seqs}
+        and ref
+        in {
+            f"seq:{event.seq}" for event in audit_input.events if event.run_id == audit_input.run_id
+        }
+    ):
         return Evidence(kind="event", ref=ref)
-    if kind == "artifact" and ref in audit_input.artifact_names:
+    if kind == "artifact" and ref in projection.visible_artifact_refs:
         return Evidence(kind="artifact", ref=ref)
-    if kind == "experiment" and ref in audit_input.experiment_ids:
+    if kind == "experiment" and ref in projection.visible_experiment_ids:
         return Evidence(kind="experiment", ref=ref)
     return None
 
@@ -315,44 +362,252 @@ def _build_proposal_projection(
     audit_input: AuditInput,
     findings: tuple[AuditFinding, ...],
     index: CitationIndex,
-) -> str:
-    """Return a redacted, deterministic projection of findings, the Run, and the citable sources."""
-    projection = {
+) -> _RegulatoryProjection:
+    """Fit complete candidate, source and event records under the exact frame budget."""
+    projection: dict[str, object] = {
         "run_id": audit_input.run_id,
-        "findings": [
-            {
-                "finding_id": finding.id,
-                "framework": finding.framework.value,
-                "control_id": finding.control_id,
-                "title": finding.title,
-            }
-            for finding in findings
-        ],
-        "source_catalog": [
-            {
-                "source_id": chunk.source_id,
-                "framework": chunk.framework.value,
-                "location": chunk.location,
-            }
-            for chunk in index.sources()
-        ],
-        "events": [
-            {"seq": event.seq, "type": event.type.value, "payload": redact_value(event.payload)}
-            for event in current_surface(audit_input.events)
-        ],
-        "artifact_names": audit_input.artifact_names,
-        "experiment_ids": audit_input.experiment_ids,
+        "findings": [],
+        "source_catalog": [],
+        "events": [],
+        "omitted_records": {"findings": 0, "sources": 0, "events": 0},
     }
-    rendered = canonical_json(redact_value(projection))
-    try:
-        return frame_untrusted(
-            rendered, label="mira-regulatory-evidence", max_chars=_MAX_PROJECTION_CHARS
-        )
-    except ValueError:
-        return (
-            "MIRA regulatory evidence omitted: the configured budget cannot fit a complete "
-            "safety frame."
-        )
+    chunks = index.sources()
+    run_events = tuple(event for event in audit_input.events if event.run_id == audit_input.run_id)
+    foreign_event_count = len(audit_input.events) - len(run_events)
+    if _render_projection(projection) is None:
+        return _empty_projection(len(findings), len(chunks), len(audit_input.events))
+
+    visible_findings: dict[str, dict[str, object]] = {}
+    omitted_findings = 0
+    for finding in findings:
+        if not _identity_preserved(finding.id):
+            omitted_findings += 1
+            continue
+        record: dict[str, object] = {
+            "finding_id": finding.id,
+            "run_id": finding.run_id,
+            "agent_id": finding.agent_id,
+            "framework": finding.framework.value,
+            "control_id": finding.control_id,
+            "title": finding.title,
+            "finding": finding.finding,
+            "severity": finding.severity.value,
+            "confidence": finding.confidence,
+            "recommendation": finding.recommendation,
+            "evidence": [
+                {"kind": item.kind, "ref": item.ref, "sha256": item.sha256}
+                for item in finding.evidence
+            ],
+        }
+        trial = {**visible_findings, finding.id: record}
+        projection["findings"] = list(trial.values())
+        projection["omitted_records"] = {
+            "findings": omitted_findings,
+            "sources": 0,
+            "events": 0,
+        }
+        if _render_projection(projection) is None:
+            omitted_findings += 1
+            continue
+        visible_findings = trial
+
+    visible_sources: dict[str, dict[str, object]] = {}
+    omitted_sources = 0
+    projection["findings"] = list(visible_findings.values())
+    for chunk in chunks:
+        if not _identity_preserved(chunk.source_id):
+            omitted_sources += 1
+            continue
+        record = {
+            "source_id": chunk.source_id,
+            "framework": chunk.framework.value,
+            "version": chunk.version,
+            "location": chunk.location,
+            "sha256": chunk.sha256,
+        }
+        trial = {**visible_sources, chunk.source_id: record}
+        projection["source_catalog"] = list(trial.values())
+        projection["omitted_records"] = {
+            "findings": omitted_findings,
+            "sources": omitted_sources,
+            "events": 0,
+        }
+        if _render_projection(projection) is None:
+            omitted_sources += 1
+            continue
+        visible_sources = trial
+
+    projection["source_catalog"] = list(visible_sources.values())
+    visible_events, omitted_events, prompt = _fit_projected_events(
+        projection,
+        tuple(current_surface(run_events)),
+        omitted_findings=omitted_findings,
+        omitted_sources=omitted_sources,
+        omitted_events=foreign_event_count,
+    )
+    if prompt is None:
+        return _empty_projection(len(findings), len(chunks), len(audit_input.events))
+
+    artifact_refs = frozenset(
+        reference
+        for event in visible_events.values()
+        if event.type is EventType.ARTIFACT_CREATED
+        for reference in _event_identifiers(event, ("name", "artifact_id", "id"))
+        if _identity_preserved(reference)
+    )
+    experiment_ids = frozenset(
+        reference
+        for event in visible_events.values()
+        if event.type in {EventType.EXPERIMENT_STARTED, EventType.EXPERIMENT_COMPLETED}
+        for reference in _event_identifiers(event, ("experiment_id", "id"))
+        if _identity_preserved(reference)
+    )
+    return _RegulatoryProjection(
+        prompt=prompt,
+        visible_finding_ids=frozenset(
+            identifier for identifier in visible_findings if _identity_preserved(identifier)
+        ),
+        visible_source_ids=frozenset(
+            identifier for identifier in visible_sources if _identity_preserved(identifier)
+        ),
+        visible_event_seqs=frozenset(visible_events),
+        visible_artifact_refs=artifact_refs,
+        visible_experiment_ids=experiment_ids,
+        omitted_finding_count=omitted_findings,
+        omitted_source_count=omitted_sources,
+        omitted_event_count=omitted_events,
+    )
+
+
+def _fit_projected_events(
+    projection: dict[str, object],
+    events: tuple[Event, ...],
+    *,
+    omitted_findings: int,
+    omitted_sources: int,
+    omitted_events: int,
+) -> tuple[dict[int, Event], int, str | None]:
+    """Fit whole optional Run-event records and bounded omission counts into the frame."""
+    visible_events: dict[int, Event] = {}
+    for event in events:
+        trial = {**visible_events, event.seq: event}
+        projection["events"] = [_event_projection(item) for item in trial.values()]
+        projection["omitted_records"] = {
+            "findings": omitted_findings,
+            "sources": omitted_sources,
+            "events": omitted_events,
+        }
+        if _render_projection(projection) is None:
+            omitted_events += 1
+            continue
+        visible_events = trial
+
+    projection["events"] = [_event_projection(item) for item in visible_events.values()]
+    projection["omitted_records"] = {
+        "findings": omitted_findings,
+        "sources": omitted_sources,
+        "events": omitted_events,
+    }
+    prompt = _render_projection(projection)
+    while prompt is None and visible_events:
+        visible_events.pop(next(reversed(visible_events)))
+        omitted_events += 1
+        projection["events"] = [_event_projection(item) for item in visible_events.values()]
+        projection["omitted_records"] = {
+            "findings": omitted_findings,
+            "sources": omitted_sources,
+            "events": omitted_events,
+        }
+        prompt = _render_projection(projection)
+    if prompt is None:
+        return visible_events, omitted_events, None
+    return visible_events, omitted_events, prompt
+
+
+def _render_projection(projection: dict[str, object]) -> str | None:
+    """Redact and size serialized JSON exactly, including the no-cap nonce frame."""
+    rendered = canonical_json(redact_value(scrub_credentials_value(projection)))
+    escaped = rendered.replace("<", r"\u003c").replace(">", r"\u003e")
+    if len(frame_overhead("mira-regulatory-evidence")) + len(escaped) > _MAX_PROJECTION_CHARS:
+        return None
+    return frame_untrusted(rendered, label="mira-regulatory-evidence")
+
+
+def _event_projection(event: Event) -> dict[str, object]:
+    """Project the full event envelope and payload for an optional finding concern."""
+    return event.model_dump(mode="json")
+
+
+def _event_identifiers(event: Event, keys: tuple[str, ...]) -> tuple[str, ...]:
+    """Return event-owned reference identifiers for visible artifact/experiment records."""
+    payload = event.payload
+    values = tuple(value for key in keys if isinstance(value := payload.get(key), str) and value)
+    experiment = payload.get("experiment")
+    if isinstance(experiment, dict):
+        nested = experiment.get("id")
+        if isinstance(nested, str) and nested:
+            values = (*values, nested)
+    subject = event.subject_id
+    return (*values, *((subject,) if isinstance(subject, str) and subject else ()))
+
+
+def _identity_preserved(identifier: str) -> bool:
+    """Accept an identifier only when source-bound redaction leaves it unchanged."""
+    return identifier == redact_value(scrub_credentials_value(identifier))
+
+
+def _empty_projection(
+    omitted_findings: int, omitted_sources: int, omitted_events: int
+) -> _RegulatoryProjection:
+    """Return a no-prompt projection with the bounded omission counts preserved."""
+    return _RegulatoryProjection(
+        prompt=None,
+        visible_finding_ids=frozenset(),
+        visible_source_ids=frozenset(),
+        visible_event_seqs=frozenset(),
+        visible_artifact_refs=frozenset(),
+        visible_experiment_ids=frozenset(),
+        omitted_finding_count=omitted_findings,
+        omitted_source_count=omitted_sources,
+        omitted_event_count=omitted_events,
+    )
+
+
+def _omission_payload(projection: _RegulatoryProjection) -> dict[str, int]:
+    """Return compact omission counts for the agent lifecycle event."""
+    return {
+        "omitted_finding_count": projection.omitted_finding_count,
+        "omitted_source_count": projection.omitted_source_count,
+        "omitted_event_count": projection.omitted_event_count,
+    }
+
+
+def _record_skipped_projection(
+    spec: AuditAgentSpec, context: AuditAgentContext, projection: _RegulatoryProjection
+) -> None:
+    """Record that no complete candidate/source pair fit before any model call."""
+    payload = {
+        "agent": spec.name,
+        "agent_id": context.agent_id,
+        "task_id": context.task_id,
+        "framework": spec.framework.value,
+        **_omission_payload(projection),
+        "model_call_skipped": True,
+    }
+    context.event_log.append(
+        EventType.AGENT_STARTED,
+        context.actor,
+        payload,
+        subject_id=context.agent_id,
+        producer="thymira.mira",
+    )
+    context.event_log.append(
+        EventType.AGENT_COMPLETED,
+        context.actor,
+        {**payload, "status": TaskStatus.COMPLETED.value},
+        subject_id=context.agent_id,
+        producer="thymira.mira",
+    )
 
 
 __all__ = [

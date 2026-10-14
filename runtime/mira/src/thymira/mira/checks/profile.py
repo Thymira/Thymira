@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from dataclasses import dataclass
 from io import BytesIO
@@ -49,6 +50,7 @@ class ProfileVerification:
     candidate: bool
     passed: bool
     detail: str = ""
+    numeric_facts: tuple[float, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,6 +144,7 @@ def verify_profile_report(store: ArtifactStore, report: Artifact) -> ProfileVeri
         candidate=True,
         passed=True,
         detail=detail,
+        numeric_facts=_verified_profile_numbers(payload),
     )
 
 
@@ -374,6 +377,30 @@ def _failed(
         passed=False,
         detail=f"profile report {report_name!r}{named}: {error}",
     )
+
+
+def _verified_profile_numbers(payload: dict[str, Any]) -> tuple[float, ...]:
+    """Collect numeric profile facts only after their source-backed recomputation passed."""
+    values: set[float] = set()
+    for field in ("shape", "columns", "correlation"):
+        _collect_numbers(payload.get(field), values)
+    return tuple(sorted(values))
+
+
+def _collect_numbers(value: object, into: set[float]) -> None:
+    """Collect finite numeric leaves from the profile facts that MIRA already verified."""
+    if isinstance(value, bool):
+        return
+    if isinstance(value, int):
+        into.add(float(value))
+    elif isinstance(value, float) and math.isfinite(value):
+        into.add(value)
+    elif isinstance(value, dict):
+        for item in value.values():
+            _collect_numbers(item, into)
+    elif isinstance(value, list):
+        for item in value:
+            _collect_numbers(item, into)
 
 
 __all__ = ["ProfileVerification", "verify_profile_report"]

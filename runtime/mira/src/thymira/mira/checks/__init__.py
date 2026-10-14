@@ -26,11 +26,13 @@ from thymira.mira.checks.invariants import (
     InvariantRegistry,
 )
 from thymira.mira.checks.models import (
+    ApplicabilityJudgment,
     AuditMode,
     AuditReport,
     AuditStatus,
     ControlResult,
     ControlStatus,
+    FindingApplicabilityAssessment,
 )
 from thymira.mira.checks.request_replay import (
     ReplayedRequest,
@@ -58,6 +60,7 @@ __all__ = [
     "SETTLEMENT_CONJUNCTS",
     "SETTLEMENT_DIAGNOSTICS_LIMIT",
     "STOP_REASONS",
+    "ApplicabilityJudgment",
     "AuditContext",
     "AuditMode",
     "AuditReport",
@@ -65,6 +68,7 @@ __all__ = [
     "Control",
     "ControlResult",
     "ControlStatus",
+    "FindingApplicabilityAssessment",
     "InvariantChecker",
     "InvariantClaim",
     "InvariantInput",

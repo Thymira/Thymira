@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, SerializerFunctionWrapHandler, model_serializer
 
 from thymira.schemas import AuditFinding, Evidence, Severity, ThymiraModel
 
@@ -38,7 +38,32 @@ class ControlResult(ThymiraModel):
     failure_code: str | None = None
 
 
-AuditStatus = Literal["passed", "passed_with_warnings", "failed"]
+AuditStatus = Literal["passed", "passed_with_warnings", "failed", "incomplete"]
+ApplicabilityStatus = Literal["applicable", "not_applicable", "undetermined"]
+
+
+class ApplicabilityJudgment(ThymiraModel):
+    """A verifier's separate, evidence-grounded view of one candidate's scope."""
+
+    status: ApplicabilityStatus = "undetermined"
+    rationale: str = "No applicability judgment was supplied."
+    concrete_action: str = ""
+    evidence: tuple[Evidence, ...] = ()
+
+
+class FindingApplicabilityAssessment(ThymiraModel):
+    """Persisted scope judgment tied to one candidate and the exact audit snapshot."""
+
+    finding_id: str
+    control_id: str
+    applicability: ApplicabilityJudgment = Field(default_factory=ApplicabilityJudgment)
+    supported: bool | None = None
+    verification_rationale: str = ""
+    activity_profile_id: str | None = None
+    activity_profile_version: int | None = Field(default=None, ge=1)
+    audit_mode: AuditMode = AuditMode.FINAL
+    snapshot_head_seq: int | None = Field(default=None, ge=0)
+    snapshot_head_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class AuditReport(ThymiraModel):
@@ -53,12 +78,24 @@ class AuditReport(ThymiraModel):
     controls: tuple[ControlResult, ...]
     findings: tuple[AuditFinding, ...] = ()
     terminal_hash: str | None = None
+    audit_mode: AuditMode = AuditMode.FINAL
     manifest_sha256: str | None = None
     graph_definition_hash: str | None = None
     policy_sha256: str | None = None
     activity_profile_id: str | None = None
     activity_profile_version: int | None = None
+    applicability_assessments: tuple[FindingApplicabilityAssessment, ...] = ()
     summary: dict[str, int] = Field(default_factory=dict)
+
+    @model_serializer(mode="wrap")
+    def _preserve_legacy_default(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        """Keep legacy FINAL report JSON byte-compatible when the field was not supplied."""
+        serialized = handler(self)
+        if "audit_mode" not in self.model_fields_set:
+            serialized.pop("audit_mode", None)
+        if not self.applicability_assessments:
+            serialized.pop("applicability_assessments", None)
+        return serialized
 
     def to_markdown(self) -> str:
         """Human-readable assurance summary (English)."""

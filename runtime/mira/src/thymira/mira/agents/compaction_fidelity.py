@@ -35,15 +35,14 @@ from pydantic_ai.usage import UsageLimits
 from thymira.agents.llm.base import LLMStructuredOutputError
 from thymira.agents.llm.routing import Role
 from thymira.agents.model_binding import routed_model
-from thymira.agents.prompt_framing import frame_untrusted
-from thymira.events import canonical_json, redact_value, shadowed_seqs
+from thymira.agents.prompt_framing import frame_overhead, frame_untrusted
+from thymira.events import canonical_json, redact_value, scrub_credentials_value, shadowed_seqs
 from thymira.mira.agents.runner import (
     build_audit_tools,
     runtime_skill_event_payload,
     runtime_skill_instructions,
     validate_audit_agent_context,
 )
-from thymira.mira.checks import COMPACTION_ENVELOPE_KEY
 from thymira.mira.finding_safety import safe_finding
 from thymira.schemas import (
     AuditFinding,
@@ -104,6 +103,16 @@ class _CompactionFidelityResponse(ThymiraModel):
     gaps: tuple[_CompactionFidelityGap, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class _CompactionProjection:
+    """Complete comparison subjects actually available to the provider."""
+
+    prompt: str | None
+    visible_compaction_seqs: frozenset[int]
+    visible_shadowed_seqs: tuple[tuple[int, frozenset[int]], ...]
+    omitted_compaction_count: int
+
+
 def audit_compaction_fidelity(
     spec: AuditAgentSpec,
     audit_input: AuditInput,
@@ -123,25 +132,33 @@ def audit_compaction_fidelity(
     validate_audit_agent_context(spec, audit_input, context)
 
     compactions = tuple(
-        event for event in audit_input.events if event.type is EventType.CONTEXT_COMPACTED
+        event
+        for event in audit_input.events
+        if event.run_id == audit_input.run_id and event.type is EventType.CONTEXT_COMPACTED
     )
     if not compactions:
         return CompactionFidelityResult(findings=())
 
-    by_seq = {event.seq: event for event in audit_input.events}
-    gaps = _propose_gaps(spec, audit_input, compactions, by_seq, context)
-    return _resolve_gaps(spec, gaps, compactions, by_seq, audit_input, context)
+    by_seq = {
+        event.seq: event for event in audit_input.events if event.run_id == audit_input.run_id
+    }
+    projection = _build_projection(audit_input, compactions, by_seq)
+    if not projection.visible_compaction_seqs:
+        _record_unavailable_projection(spec, context, projection.omitted_compaction_count)
+        return CompactionFidelityResult(findings=())
+    gaps = _propose_gaps(spec, projection, context)
+    return _resolve_gaps(spec, gaps, projection, compactions, audit_input, context)
 
 
 def _propose_gaps(
     spec: AuditAgentSpec,
-    audit_input: AuditInput,
-    compactions: tuple[Event, ...],
-    by_seq: dict[int, Event],
+    projection: _CompactionProjection,
     context: AuditAgentContext,
 ) -> tuple[_CompactionFidelityGap, ...]:
     """Run the agent once over the compaction projection and return its raw proposals."""
-    prompt = _build_projection(audit_input, compactions, by_seq)
+    prompt = projection.prompt
+    if prompt is None:
+        raise RuntimeError("MIRA compaction projection is unavailable")
     instructions = runtime_skill_instructions(spec, context)
     runtime_evidence = runtime_skill_event_payload(context)
     task_kind = spec.task_kinds[0]
@@ -178,6 +195,7 @@ def _propose_gaps(
             "agent_id": context.agent_id,
             "task_id": context.task_id,
             "framework": spec.framework.value,
+            "omitted_compaction_count": projection.omitted_compaction_count,
         },
         subject_id=context.agent_id,
         producer="thymira.mira",
@@ -194,6 +212,7 @@ def _propose_gaps(
                 "task_id": context.task_id,
                 "status": TaskStatus.FAILED.value,
                 "max_turns": spec.max_turns,
+                "omitted_compaction_count": projection.omitted_compaction_count,
             },
             subject_id=context.agent_id,
             producer="thymira.mira",
@@ -209,6 +228,7 @@ def _propose_gaps(
             "agent_id": context.agent_id,
             "task_id": context.task_id,
             "status": TaskStatus.COMPLETED.value,
+            "omitted_compaction_count": projection.omitted_compaction_count,
         },
         subject_id=context.agent_id,
         producer="thymira.mira",
@@ -219,20 +239,23 @@ def _propose_gaps(
 def _resolve_gaps(
     spec: AuditAgentSpec,
     gaps: tuple[_CompactionFidelityGap, ...],
+    projection: _CompactionProjection,
     compactions: tuple[Event, ...],
-    by_seq: dict[int, Event],
     audit_input: AuditInput,
     context: AuditAgentContext,
 ) -> CompactionFidelityResult:
-    """Turn each proposal that names a real compaction into a finding with recovered evidence."""
-    compaction_by_seq = {event.seq: event for event in compactions}
+    """Resolve only compactions and shadowed records included in the provider projection."""
+    visible_shadowed = dict(projection.visible_shadowed_seqs)
+    compaction_by_seq = {
+        event.seq: event for event in compactions if event.seq in projection.visible_compaction_seqs
+    }
     findings: list[AuditFinding] = []
     for gap in gaps:
         compaction = compaction_by_seq.get(gap.compaction_seq)
         if compaction is None:
             # A proposal about a compaction that does not exist cannot be minted into a finding.
             continue
-        actual = _recovered_shadowed_seqs(compaction, by_seq)
+        actual = tuple(sorted(visible_shadowed.get(compaction.seq, frozenset())))
         omitted = tuple(seq for seq in gap.omitted_seqs if seq in actual)
         referenced = omitted or actual
         findings.append(_finding(spec, gap, compaction, referenced, audit_input, context))
@@ -289,37 +312,104 @@ def _build_projection(
     audit_input: AuditInput,
     compactions: tuple[Event, ...],
     by_seq: dict[int, Event],
-) -> str:
-    """Return a redacted, deterministic projection pairing each summary with its shadowed events."""
-    projection = {
+) -> _CompactionProjection:
+    """Fit whole summary/shadowed-event comparisons under the exact framed-message budget."""
+    projection: dict[str, object] = {
         "run_id": audit_input.run_id,
-        "compactions": [
-            {
-                "compaction_seq": compaction.seq,
-                "summary": compaction.payload.get(COMPACTION_SUMMARY_KEY),
-                "envelope": compaction.payload.get(COMPACTION_ENVELOPE_KEY),
-                "shadowed_events": [
-                    {
-                        "seq": seq,
-                        "type": by_seq[seq].type.value,
-                        "payload": by_seq[seq].payload,
-                    }
-                    for seq in _recovered_shadowed_seqs(compaction, by_seq)
-                ],
-            }
-            for compaction in compactions
-        ],
+        "compactions": [],
+        "omitted_records": {"compactions": 0},
     }
-    rendered = canonical_json(redact_value(projection))
-    try:
-        return frame_untrusted(
-            rendered, label="mira-compaction-evidence", max_chars=_MAX_PROJECTION_CHARS
-        )
-    except ValueError:
-        return (
-            "MIRA compaction evidence omitted: the configured budget cannot fit a complete "
-            "safety frame."
-        )
+    if _render_projection(projection) is None:
+        return _CompactionProjection(None, frozenset(), (), len(compactions))
+
+    visible: dict[int, tuple[dict[str, object], frozenset[int]]] = {}
+    omitted_count = 0
+    for compaction in compactions:
+        declared_seqs = shadowed_seqs(compaction)
+        actual_seqs = _recovered_shadowed_seqs(compaction, by_seq)
+        summary = compaction.payload.get(COMPACTION_SUMMARY_KEY)
+        if (
+            len(declared_seqs) != len(actual_seqs)
+            or not actual_seqs
+            or not isinstance(summary, str)
+            or not summary.strip()
+            or compaction.hash is None
+            or any(by_seq[seq].hash is None for seq in actual_seqs)
+        ):
+            omitted_count += 1
+            continue
+        comparison = {
+            "compaction": _event_projection(compaction),
+            "summary": summary,
+            "shadowed_events": [_event_projection(by_seq[seq]) for seq in actual_seqs],
+        }
+        trial = {**visible, compaction.seq: (comparison, frozenset(actual_seqs))}
+        projection["compactions"] = [item[0] for item in trial.values()]
+        if _render_projection(projection) is None:
+            omitted_count += 1
+            continue
+        visible = trial
+
+    projection["compactions"] = [item[0] for item in visible.values()]
+    projection["omitted_records"] = {"compactions": omitted_count}
+    prompt = _render_projection(projection)
+    while prompt is None and visible:
+        seq = next(reversed(visible))
+        visible.pop(seq)
+        omitted_count += 1
+        projection["compactions"] = [item[0] for item in visible.values()]
+        projection["omitted_records"] = {"compactions": omitted_count}
+        prompt = _render_projection(projection)
+    return _CompactionProjection(
+        prompt=prompt,
+        visible_compaction_seqs=frozenset(visible),
+        visible_shadowed_seqs=tuple(
+            (seq, shadowed) for seq, (_record, shadowed) in visible.items()
+        ),
+        omitted_compaction_count=omitted_count,
+    )
+
+
+def _render_projection(projection: dict[str, object]) -> str | None:
+    """Redact and size serialized JSON exactly, including the no-cap nonce frame."""
+    rendered = canonical_json(redact_value(scrub_credentials_value(projection)))
+    escaped = rendered.replace("<", r"\u003c").replace(">", r"\u003e")
+    if len(frame_overhead("mira-compaction-evidence")) + len(escaped) > _MAX_PROJECTION_CHARS:
+        return None
+    return frame_untrusted(rendered, label="mira-compaction-evidence")
+
+
+def _event_projection(event: Event) -> dict[str, object]:
+    """Project the complete hash-pinned event envelope and payload."""
+    return event.model_dump(mode="json")
+
+
+def _record_unavailable_projection(
+    spec: AuditAgentSpec, context: AuditAgentContext, omitted_count: int
+) -> None:
+    """Record that all comparison subjects were omitted before any model call."""
+    payload = {
+        "agent": spec.name,
+        "agent_id": context.agent_id,
+        "task_id": context.task_id,
+        "framework": spec.framework.value,
+        "omitted_compaction_count": omitted_count,
+        "model_call_skipped": True,
+    }
+    context.event_log.append(
+        EventType.AGENT_STARTED,
+        context.actor,
+        payload,
+        subject_id=context.agent_id,
+        producer="thymira.mira",
+    )
+    context.event_log.append(
+        EventType.AGENT_COMPLETED,
+        context.actor,
+        {**payload, "status": TaskStatus.COMPLETED.value},
+        subject_id=context.agent_id,
+        producer="thymira.mira",
+    )
 
 
 __all__ = [

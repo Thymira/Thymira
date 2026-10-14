@@ -12,6 +12,8 @@ record by being asserted -- only by resolving.
 
 from __future__ import annotations
 
+import json
+import re
 import traceback
 from typing import TYPE_CHECKING
 
@@ -96,6 +98,7 @@ def _finding(
     framework: Framework,
     title: str,
     evidence: tuple[Evidence, ...],
+    finding: str = "observed by another audit agent",
 ) -> AuditFinding:
     """Build one finding another audit agent already emitted for this Run."""
     return AuditFinding(
@@ -105,7 +108,7 @@ def _finding(
         control_id=control_id,
         framework=framework,
         title=title,
-        finding="observed by another audit agent",
+        finding=finding,
         severity=Severity.HIGH,
         confidence=0.9,
         evidence=evidence,
@@ -192,6 +195,21 @@ def _decision(run_id: str) -> PolicyDecision:
     )
 
 
+def _framed_json(prompt: str) -> dict[str, object]:
+    """Parse the payload from one intact regulatory-evidence frame."""
+    match = re.search(
+        r"<<<THYMIRA_UNTRUSTED:(?P<nonce>[0-9a-f]{32}):mira-regulatory-evidence:START>>>\n"
+        r"The following[^\n]*\n(?P<payload>.*?)\n"
+        r"<<<THYMIRA_UNTRUSTED:(?P=nonce):mira-regulatory-evidence:END>>>",
+        prompt,
+        re.DOTALL,
+    )
+    assert match is not None, "provider prompt must preserve its complete nonce frame"
+    value = json.loads(match.group("payload"))
+    assert isinstance(value, dict)
+    return value
+
+
 def test_load_default_specs_ships_the_reg_evidence_agent() -> None:
     spec = _reg_evidence_spec()
 
@@ -256,6 +274,176 @@ def test_enrich_findings_attaches_resolvable_citations_and_drops_fabricated_ones
 
     all_refs = [ref.ref for finding in result.findings for ref in finding.evidence]
     assert all(_FABRICATED_SOURCE not in ref for ref in all_refs)
+
+
+def test_enrichment_does_not_resolve_citations_for_an_omitted_large_subject() -> None:
+    """A candidate too large for the whole-record projection remains unenriched."""
+    leakage = _chunk(_seed_chunks(), _LEAKAGE_SOURCE)
+    index = CitationIndex.from_chunks((leakage,))
+    log = InMemoryEventLog(new_id("run"))
+    subject = _finding(
+        log.run_id,
+        new_id("agent"),
+        control_id="METHOD-LEAKAGE",
+        framework=Framework.METHODOLOGY,
+        title="OMITTED_SUBJECT_START " + ("x" * 20_000),
+        evidence=(),
+    )
+    audit_input = AuditInput(run_id=log.run_id, events=(), report=None)
+    provider = ScriptedProvider(
+        [{"citations": [{"finding_id": subject.id, "source_id": _LEAKAGE_SOURCE}]}]
+    )
+    context = AuditAgentContext(
+        route_policy=TEST_ROUTE_POLICY,
+        event_log=log,
+        actor=Actor.system(),
+        agent_id=new_id("agent"),
+        task_id=new_id("task"),
+        provider=provider,
+    )
+
+    result = enrich_findings(_reg_evidence_spec(), audit_input, (subject,), index, context)
+
+    # On the former tail-truncated route, parse the captured public provider prompt first so a
+    # malformed JSON payload is the observed failure before asserting the new safe outcome.
+    for call in provider.calls:
+        _framed_json(call["prompt"])
+    assert provider.calls == []
+    assert result.findings == (subject,)
+    assert result.enriched == ()
+    assert result.dropped_citations == ()
+    completed = next(event for event in log.events() if event.type is EventType.AGENT_COMPLETED)
+    assert completed.payload["model_call_skipped"] is True
+    assert completed.payload["omitted_finding_count"] == 1
+
+
+def test_enrichment_only_resolves_sources_for_complete_visible_candidates() -> None:
+    """The prompt includes a full proposition and digest; omitted candidates stay untouched."""
+    chunks = (_chunk(_seed_chunks(), _LEAKAGE_SOURCE),)
+    index = CitationIndex.from_chunks(chunks)
+    log = InMemoryEventLog(new_id("run"))
+    agent_id = new_id("agent")
+    visible = _finding(
+        log.run_id,
+        agent_id,
+        control_id="METHOD-LEAKAGE",
+        framework=Framework.METHODOLOGY,
+        title="Visible leakage finding",
+        finding="The feature includes post-outcome information.",
+        evidence=(),
+    )
+    omitted = _finding(
+        log.run_id,
+        agent_id,
+        control_id="METHOD-LEAKAGE-LARGE",
+        framework=Framework.METHODOLOGY,
+        title="LARGE_SUBJECT " + ("x" * 20_000),
+        finding="This complete candidate cannot fit.",
+        evidence=(),
+    )
+    audit_input = AuditInput(run_id=log.run_id, events=(), report=None)
+    provider = ScriptedProvider(
+        [
+            {
+                "citations": [
+                    {"finding_id": visible.id, "source_id": _LEAKAGE_SOURCE},
+                    {"finding_id": omitted.id, "source_id": _LEAKAGE_SOURCE},
+                ]
+            }
+        ]
+    )
+    context = AuditAgentContext(
+        route_policy=TEST_ROUTE_POLICY,
+        event_log=log,
+        actor=Actor.system(),
+        agent_id=agent_id,
+        task_id=new_id("task"),
+        provider=provider,
+    )
+
+    result = enrich_findings(_reg_evidence_spec(), audit_input, (visible, omitted), index, context)
+
+    projection = _framed_json(provider.calls[0]["prompt"])
+    assert len(provider.calls[0]["prompt"]) <= 12_000
+    projected_findings = projection["findings"]
+    assert isinstance(projected_findings, list)
+    assert len(projected_findings) == 1
+    projected_finding = projected_findings[0]
+    assert isinstance(projected_finding, dict)
+    assert projected_finding["finding"] == "The feature includes post-outcome information."
+    assert projected_finding["control_id"] == visible.control_id
+    projected_sources = projection["source_catalog"]
+    assert isinstance(projected_sources, list)
+    source = next(
+        record
+        for record in projected_sources
+        if isinstance(record, dict) and record["source_id"] == _LEAKAGE_SOURCE
+    )
+    assert isinstance(source, dict)
+    assert source["sha256"] == chunks[0].sha256
+    assert result.findings[1] == omitted
+    assert result.enriched == (result.findings[0],)
+    assert any(reference.sha256 == chunks[0].sha256 for reference in result.findings[0].evidence)
+    assert result.dropped_citations == (_LEAKAGE_SOURCE,)
+
+
+def test_redacted_source_identity_cannot_be_resolved_from_its_unseen_raw_id() -> None:
+    """A source id changed by PII redaction is not an identity the provider can cite."""
+    source_id = "synthetic@example.com"
+    chunk = RegulationChunk.from_text(
+        source_id=source_id,
+        framework=Framework.METHODOLOGY,
+        location="Section 1",
+        text="A synthetic source used to test redacted identifiers.",
+    )
+    visible_chunk = RegulationChunk.from_text(
+        source_id="visible-synthetic-source",
+        framework=Framework.METHODOLOGY,
+        location="Section 2",
+        text="A second visible source keeps the provider seam active.",
+    )
+    index = CitationIndex.from_chunks((chunk, visible_chunk))
+    log = InMemoryEventLog(new_id("run"))
+    subject = _finding(
+        log.run_id,
+        new_id("agent"),
+        control_id="METHOD-IDENTITY",
+        framework=Framework.METHODOLOGY,
+        title="Identifier redaction",
+        finding="The source identity must remain exact to be cited.",
+        evidence=(),
+    )
+    audit_input = AuditInput(run_id=log.run_id, events=(), report=None)
+    provider = ScriptedProvider(
+        [{"citations": [{"finding_id": subject.id, "source_id": source_id}]}]
+    )
+    context = AuditAgentContext(
+        route_policy=TEST_ROUTE_POLICY,
+        event_log=log,
+        actor=Actor.system(),
+        agent_id=new_id("agent"),
+        task_id=new_id("task"),
+        provider=provider,
+    )
+
+    result = enrich_findings(_reg_evidence_spec(), audit_input, (subject,), index, context)
+
+    prompt = provider.calls[0]["prompt"]
+    assert len(prompt) <= 12_000
+    projection = _framed_json(prompt)
+    assert source_id not in prompt
+    source_records = projection["source_catalog"]
+    assert isinstance(source_records, list)
+    assert all(
+        not isinstance(record, dict) or record["source_id"] != "[REDACTED:EMAIL]"
+        for record in source_records
+    )
+    omitted = projection["omitted_records"]
+    assert isinstance(omitted, dict)
+    assert omitted["sources"] == 1
+    assert result.findings == (subject,)
+    assert result.enriched == ()
+    assert result.dropped_citations == (source_id,)
 
 
 def test_enrichment_discards_model_proposed_evidence_notes(

@@ -2238,7 +2238,9 @@ def audit_run(
     )
     failed = [r for r in results if r.status is ControlStatus.FAILED]
     status: AuditStatus = "passed"
-    if any(r.severity in (Severity.HIGH, Severity.CRITICAL) for r in failed):
+    if any(r.status is ControlStatus.NOT_EVALUATED for r in results):
+        status = "incomplete"
+    elif any(r.severity in (Severity.HIGH, Severity.CRITICAL) for r in failed):
         status = "failed"
     elif failed:
         status = "passed_with_warnings"
@@ -2249,6 +2251,7 @@ def audit_run(
         controls=tuple(results),
         findings=findings,
         terminal_hash=ctx.events[-1].hash if ctx.events else None,
+        audit_mode=ctx.audit_mode,
         summary=summary,
     )
 

@@ -209,9 +209,15 @@ def _verify_correlation(claim: object, frame: pl.DataFrame) -> None:
             _fail(f"{path}[{name!r}]", "has the wrong axis length")
         for row_index, other in enumerate(columns):
             expected = _pearson(columns[column_index], other)
+            cell_path = f"{path}/{_pointer_part(name)}/{row_index}"
+            claimed_value = claimed_column[row_index]
+            if math.isnan(expected):
+                if claimed_value is None:
+                    continue
+                _fail(cell_path, "must be null when the recomputed correlation is undefined")
             _close_number(
-                f"{path}/{_pointer_part(name)}/{row_index}",
-                claimed_column[row_index],
+                cell_path,
+                claimed_value,
                 expected,
                 abs_tol=_CORRELATION_ABS_TOLERANCE,
             )

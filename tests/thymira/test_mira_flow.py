@@ -21,6 +21,7 @@ from thymira.mira import (
     load_default_packs,
 )
 from thymira.mira.checks import AuditMode, AuditReport, ControlStatus, assess_audit_freshness
+from thymira.mira.verification import DiscoveryLimits
 from thymira.schemas import (
     ActivityProfile,
     Actor,
@@ -96,6 +97,7 @@ def _flow(
     specs: tuple[AuditAgentSpec, ...] = (),
     run_agent: Callable[[AuditAgentSpec, str, tuple[Event, ...], AuditReport], AuditAgentOutput]
     | None = None,
+    discovery: DiscoveryLimits | None = None,
 ) -> MiraAuditFlow:
     """Build the canonical flow with the only dependencies this test needs."""
     return MiraAuditFlow(
@@ -104,6 +106,7 @@ def _flow(
             event_log=log,
             specs=specs,
             run_agent=run_agent,
+            discovery=discovery,
         )
     )
 
@@ -242,6 +245,50 @@ def test_flow_skips_inapplicable_specs_without_requiring_a_runner() -> None:
 
     assert result.audit_report.run_id == graph_input.run.id
     assert not any(event.type is EventType.AGENT_STARTED for event in log.events())
+
+
+def test_aggregate_report_preserves_in_flight_audit_mode() -> None:
+    graph_input, log = _input_with_open_run()
+    graph_input = graph_input.model_copy(update={"audit_mode": AuditMode.IN_FLIGHT})
+
+    result = _flow(log).run(graph_input)
+
+    assert result.audit_report.audit_mode is AuditMode.IN_FLIGHT
+
+
+def test_discovery_round_receives_prior_findings_and_stops_repeating_drafts() -> None:
+    graph_input, log = _input_with_open_run(frameworks=(Framework.EU_AI_ACT,))
+    spec = _spec("euaiact", Framework.EU_AI_ACT)
+    observed_prior_drafts: list[bool] = []
+    calls = 0
+
+    def run_agent(
+        _specification: AuditAgentSpec,
+        run_id: str,
+        _events: tuple[Event, ...],
+        report: AuditReport,
+    ) -> AuditAgentOutput:
+        nonlocal calls
+        calls += 1
+        prior_draft = any(finding.control_id == "MODEL-ARTICLE-14" for finding in report.findings)
+        observed_prior_drafts.append(prior_draft)
+        if prior_draft:
+            return AuditAgentOutput(agent_name="euaiact")
+        finding = _finding(run_id, "MODEL-ARTICLE-14").model_copy(
+            update={"finding": f"Draft {calls} reports an unsupported oversight gap."}
+        )
+        return AuditAgentOutput.from_spec(spec, findings=(finding,))
+
+    result = _flow(
+        log,
+        specs=(spec,),
+        run_agent=run_agent,
+        discovery=DiscoveryLimits(max_rounds=4),
+    ).run(graph_input)
+
+    assert observed_prior_drafts == [False, True]
+    assert calls == 2
+    assert sum(finding.control_id == "MODEL-ARTICLE-14" for finding in result.audit_findings) == 1
 
 
 def test_flow_rejects_an_input_for_another_event_log() -> None:

@@ -15,7 +15,7 @@ from thymira.mira.board_replay import (
     replay_boards,
     replay_dependency_selection,
 )
-from thymira.mira.checks import AuditMode, AuditReport
+from thymira.mira.checks import AuditMode, AuditReport, FindingApplicabilityAssessment
 from thymira.mira.grounding import RunEvidenceIndex, ground_findings
 from thymira.mira.orchestrator import (
     MiraAuditOrchestrator,
@@ -30,6 +30,8 @@ from thymira.mira.verification import (
     DiscoveryLimits,
     IndependentAuditEvidence,
     VerificationDrop,
+    VerificationSupported,
+    VerificationUnavailable,
     _prefer_finding,
     finding_dedup_key,
     verify_candidate_findings,
@@ -151,6 +153,8 @@ class MiraAuditFlow:
         self._preflight: MiraPreflightResult | None = None
         self._result: MiraAuditResult | None = None
         self._verification_drops: tuple[VerificationDrop, ...] = ()
+        self._verification_unavailable: tuple[VerificationUnavailable, ...] = ()
+        self._verification_supported: tuple[VerificationSupported, ...] = ()
         self._board_replay: BoardReplay | None = None
 
     @property
@@ -273,15 +277,60 @@ class MiraAuditFlow:
             deterministic_report,
             findings,
         )
+        snapshot_head = independent_evidence.events[-1] if independent_evidence.events else None
+        applicability_assessments = tuple(
+            FindingApplicabilityAssessment(
+                finding_id=record.finding.id,
+                control_id=record.finding.control_id,
+                applicability=record.verdict.applicability,
+                supported=record.verdict.supported,
+                verification_rationale=record.verdict.rationale,
+                activity_profile_id=deterministic_report.activity_profile_id,
+                activity_profile_version=deterministic_report.activity_profile_version,
+                audit_mode=deterministic_report.audit_mode,
+                snapshot_head_seq=snapshot_head.seq if snapshot_head is not None else None,
+                snapshot_head_hash=snapshot_head.hash if snapshot_head is not None else None,
+            )
+            for record in outcome.judgments
+        )
+        result = result.model_copy(
+            update={
+                "audit_report": result.audit_report.model_copy(
+                    update={"applicability_assessments": applicability_assessments}
+                )
+            }
+        )
         self._record_findings(findings)
         self._result = result
         self._verification_drops = outcome.drop_records
+        self._verification_unavailable = outcome.unavailable_records
+        self._verification_supported = outcome.supported_records
         return result
 
     def run(self, graph_input: MiraGraphInput) -> MiraAuditResult:
         """Run preflight and the final audit consecutively for standalone callers."""
+        prior_events = tuple(self._config.event_log.events())
+        prior_identities = {(event.seq, event.hash) for event in prior_events}
         self.preflight(graph_input)
-        return self.audit(graph_input)
+        # The public standalone path creates its own immutable governance records during
+        # preflight. Include exactly those records in the critic snapshot; do not replace the
+        # caller's evidence snapshot with the mutable log or include producer/model events.
+        preflight_records = tuple(
+            event
+            for event in self._config.event_log.events()
+            if (event.seq, event.hash) not in prior_identities
+            and event.producer == "thymira.mira"
+            and event.type
+            in {
+                EventType.AUDIT_STARTED,
+                EventType.RISK_ASSESSMENT_RECORDED,
+                EventType.PACK_BINDING_RECORDED,
+            }
+        )
+        audit_input = graph_input.model_copy(
+            update={"events": (*graph_input.events, *preflight_records)}
+        )
+        return self.audit(audit_input)
 
     def complete(
         self,
@@ -314,6 +363,22 @@ class MiraAuditFlow:
                     "reason": drop.rationale,
                 }
                 for drop in self._verification_drops
+            ],
+            "verification_unavailable": len(self._verification_unavailable),
+            "verification_unavailable_findings": [
+                {
+                    "finding": item.finding.model_dump(mode="json"),
+                    "reason": item.rationale,
+                }
+                for item in self._verification_unavailable
+            ],
+            "verification_supported": len(self._verification_supported),
+            "verification_supported_findings": [
+                {
+                    "finding": item.finding.model_dump(mode="json"),
+                    "reason": item.rationale,
+                }
+                for item in self._verification_supported
             ],
             "audit_revision": audit_revision,
         }
@@ -422,11 +487,12 @@ class MiraAuditFlow:
             new_this_pass = False
             for spec in producer_specs:
                 selected_spec = self._with_configured_runtime_skills(spec)
+                round_report = report.model_copy(update={"findings": tuple(candidates)})
                 output = runner(
                     selected_spec,
                     snapshot.run.id,
                     independent_events,
-                    report,
+                    round_report,
                 )
                 # Re-read the log after each agent: its own recorded tool calls are evidence it
                 # may legitimately cite, and they did not exist when the round began.

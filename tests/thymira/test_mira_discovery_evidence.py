@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+import pytest
+
 from tests.thymira.fixtures_tools import development_policy
 from thymira.events import JsonlEventLog, read_events, sha256_text, verify_log
 from thymira.mira.checks import AuditContext, AuditMode, ControlStatus, audit_run
@@ -24,15 +26,16 @@ from thymira.schemas import Actor, ArtifactKind, EventType, new_id
 from thymira.state import LocalArtifactStore
 from thymira.tools import (
     DiscoveryValue,
+    FileListingValue,
     Tool,
     ToolContext,
     ToolManager,
     ToolRegistry,
     ToolResult,
 )
-from thymira.tools.builtins.files import EditFile, ReadFile
+from thymira.tools.builtins.files import EditFile, ListFiles, ReadFile
 from thymira.tools.builtins.freshness import FreshnessPolicy, ReadLedger
-from thymira.tools.builtins.search import Glob
+from thymira.tools.builtins.search import Glob, Grep
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
@@ -67,6 +70,43 @@ def _a33(events: list[Event], store: ArtifactStore | None, run_id: str) -> Contr
     ctx = AuditContext(run_id=run_id, events=events, store=store, audit_mode=AuditMode.FINAL)
     report = audit_run(ctx)
     return next(c for c in report.controls if c.control_id == "A33")
+
+
+def _run_real_discovery(
+    tmp_path: Path,
+    tool: Tool,
+    arguments: dict[str, Any],
+    *,
+    workspace_files: dict[str, str | bytes] | None = None,
+) -> tuple[ToolResult, dict[str, Any], ControlResult]:
+    """Run a real producer and check its reopened JSONL/store through the independent A33."""
+    run_id = new_id("run")
+    artifacts_root = tmp_path / "artifacts"
+    context, _log = _context(tmp_path, run_id, artifacts_root)
+    for relative, content in (workspace_files or {}).items():
+        path = context.workspace / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(content, bytes):
+            path.write_bytes(content)
+        else:
+            path.write_text(content, encoding="utf-8", newline="\n")
+    execution = ToolManager(ToolRegistry((tool,))).execute(context, tool.name, arguments)
+    assert execution.result.success, execution.result.error
+
+    log_path = tmp_path / "runs" / f"{run_id}.jsonl"
+    assert verify_log(log_path).valid
+    reread_events = read_events(log_path)
+    reopened_store = LocalArtifactStore(artifacts_root, run_id)
+    assert reopened_store.verify() == []
+
+    artifact_name = next(
+        name
+        for name, artifact in reopened_store.manifest().items()
+        if artifact.id in execution.result.artifact_ids
+    )
+    payload = reopened_store.load_json(artifact_name)
+    audit = _a33(reread_events, reopened_store, run_id)
+    return execution.result, payload, audit
 
 
 def test_a33_passes_a_real_capped_glob(tmp_path: Path) -> None:
@@ -130,6 +170,105 @@ def test_a33_passes_a_real_capped_glob(tmp_path: Path) -> None:
     assert witness["query"] == {"pattern": "**/*.txt", "path": "."}
     assert witness["matches"] == independent
     assert witness["source"]["files"]
+
+
+@pytest.mark.parametrize(
+    ("pattern", "expected"),
+    [
+        (
+            "root/**.csv",
+            [
+                "root/].csv",
+                "root/a.csv",
+                "root/a1.csv",
+                "root/b2.csv",
+                "root/c3.csv",
+                "root/d4.csv",
+                "root/nested/a5.csv",
+                "root/nested/literal[.csv",
+            ],
+        ),
+        ("root/[ab]?.csv", ["root/a1.csv", "root/b2.csv"]),
+        ("root/[!c]?.csv", ["root/a1.csv", "root/b2.csv", "root/d4.csv"]),
+        ("root/[]a].csv", ["root/].csv", "root/a.csv"]),
+        ("root/nested/literal[.csv", ["root/nested/literal[.csv"]),
+    ],
+    ids=[
+        "double-star-crosses-directories",
+        "positive-class-and-question",
+        "negative-class",
+        "literal-right-bracket-in-class",
+        "unmatched-left-bracket",
+    ],
+)
+def test_a33_reconciles_real_glob_syntax_against_retained_paths(
+    tmp_path: Path, pattern: str, expected: list[str]
+) -> None:
+    """The real Glob projection and A33 agree on glob edge syntax and explicit path oracles."""
+    paths = (
+        "root/a1.csv",
+        "root/b2.csv",
+        "root/c3.csv",
+        "root/d4.csv",
+        "root/nested/a5.csv",
+        "root/nested/literal[.csv",
+        "root/].csv",
+        "root/a.csv",
+    )
+    result, payload, audit = _run_real_discovery(
+        tmp_path,
+        cast("Tool", Glob()),
+        {"pattern": pattern, "path": "."},
+        workspace_files=dict.fromkeys(paths, ""),
+    )
+
+    assert isinstance(result.value, DiscoveryValue)
+    assert tuple(result.value.matches) == tuple(expected)
+    assert payload["matches"] == expected
+    assert payload["total"] == len(expected)
+    assert audit.status is ControlStatus.PASSED, audit.detail
+
+
+def test_a33_reconciles_real_grep_include_skips_and_source_content(tmp_path: Path) -> None:
+    """A33 independently confirms Grep's include filter, skipped files, matches and digest."""
+    result, payload, audit = _run_real_discovery(
+        tmp_path,
+        cast("Tool", Grep()),
+        {"pattern": "risk", "path": "code", "include": "*.py"},
+        workspace_files={
+            "code/allowed.py": "risk score\nsafe\nrisk ratio\n",
+            "code/clean.py": "safe\n",
+            "code/broken.py": b"\xff\xfe",
+            "code/readme.txt": "risk outside the include filter\n",
+        },
+    )
+
+    assert result.success
+    assert payload["query"] == {"pattern": "risk", "path": "code", "include": "*.py"}
+    assert payload["matches"] == [
+        {"path": "code/allowed.py", "line": 1},
+        {"path": "code/allowed.py", "line": 3},
+    ]
+    assert payload["skipped"] == ["code/broken.py"]
+    assert "readme.txt" not in result.stdout
+    assert audit.status is ControlStatus.PASSED, audit.detail
+
+
+def test_a33_reconciles_real_list_files_against_the_reopened_source_witness(
+    tmp_path: Path,
+) -> None:
+    """ListFiles' persisted complete path set survives a fresh-store A33 audit."""
+    result, payload, audit = _run_real_discovery(
+        tmp_path,
+        cast("Tool", ListFiles()),
+        {"path": "data"},
+        workspace_files={"data/beta.csv": "", "data/nested/alpha.csv": ""},
+    )
+
+    assert payload["matches"] == ["data/beta.csv", "data/nested/alpha.csv"]
+    assert isinstance(result.value, FileListingValue)
+    assert tuple(result.value.paths) == tuple(payload["matches"])
+    assert audit.status is ControlStatus.PASSED, audit.detail
 
 
 # ------------------------------------------------------------------------- the forged-tool rig
@@ -207,11 +346,15 @@ def _honest_payload(
 
 
 def _run_forged(
-    tmp_path: Path, tool: _ForgedDiscoveryTool
+    tmp_path: Path, tool: _ForgedDiscoveryTool, *, source_files: tuple[str, ...] = ()
 ) -> tuple[list[Event], ArtifactStore, str]:
     run_id = new_id("run")
     artifacts_root = tmp_path / "artifacts"
     context, log = _context(tmp_path, run_id, artifacts_root)
+    for relative in source_files:
+        path = context.workspace / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("", encoding="utf-8", newline="\n")
     manager = ToolManager(ToolRegistry((cast("Tool", tool),)))
     manager.execute(context, "glob", {"pattern": "*.txt"})
     return log.events(), context.artifact_store, run_id
@@ -292,6 +435,26 @@ def test_a33_refuses_a_match_list_that_is_not_sorted(tmp_path: Path) -> None:
 
     assert result.status is ControlStatus.FAILED
     assert "ordered" in result.detail
+
+
+def test_a33_refuses_a_coherent_but_incomplete_producer_list(tmp_path: Path) -> None:
+    """An authentic manager witness rejects a self-consistent list omitting a real path."""
+    payload = _honest_payload(matches=["a.txt", "c.txt"], total=2)
+    payload["query"] = {"pattern": "*.txt", "path": "."}
+    events, store, run_id = _run_forged(
+        tmp_path,
+        _ForgedDiscoveryTool(payload=payload),
+        source_files=("a.txt", "b.txt", "c.txt"),
+    )
+
+    result = _a33(events, store, run_id)
+
+    assert result.status is ControlStatus.FAILED
+    assert (
+        "producer discovery list is incomplete or differs from the source witness" in result.detail
+    )
+    completed = next(event for event in events if event.type is EventType.TOOL_COMPLETED)
+    assert payload["rendered"]["sha256"] == completed.payload["result_sha256"]
 
 
 def test_a33_is_not_evaluated_without_an_artifact_store(tmp_path: Path) -> None:

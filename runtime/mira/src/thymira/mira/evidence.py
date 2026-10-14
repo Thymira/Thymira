@@ -187,6 +187,8 @@ def build_evidence_observations(
     if store is not None:
         problems = set(store.verify())
         for name, artifact in sorted(store.manifest().items()):
+            if name.startswith(".history/") and name != artifact.name:
+                continue
             if artifact.run_id != run_id:
                 continue
             observations.append(
