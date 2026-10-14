@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 from pathlib import PurePosixPath
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import Field, field_validator, model_validator
 
@@ -92,6 +92,7 @@ class ThyAgentKind(StrEnum):
     DATA = "data"
     CODING = "coding"
     EXPERIMENT = "experiment"
+    EVALUATION = "evaluation"
     STATISTICS = "statistics-agent"
     DATA_QUALITY = "data-quality-agent"
     VISUALIZATION = "visualization-agent"
@@ -104,6 +105,22 @@ class ArtifactRequirement(ThymiraModel):
     name: str = Field(min_length=1)
     kind: ArtifactKind = ArtifactKind.OTHER
     media_type: str | None = None
+    match: Literal["exact", "content"] = "exact"
+    metric_keys: tuple[str, ...] = ()
+    model_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    dataset_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    source_run_id: Id | None = None
+    source_model_artifact_id: Id | None = None
+    evaluation_split: Literal["recorded_holdout", "all_rows"] | None = None
+
+    @model_validator(mode="after")
+    def _content_contract(self) -> ArtifactRequirement:
+        """Content matching requires an explicit analytical contract, never a basename guess."""
+        if self.match == "content" and (
+            self.kind is not ArtifactKind.METRICS or not self.metric_keys
+        ):
+            raise ValueError("content matching requires METRICS and nonempty metric_keys")
+        return self
 
     @field_validator("name")
     @classmethod
@@ -132,12 +149,41 @@ class AgentTask(ThymiraModel):
     depends_on: tuple[str, ...] = ()
     skill_names: tuple[str, ...] = ()
     required_artifacts: tuple[ArtifactRequirement, ...] = ()
+    model_input_ids: tuple[Id, ...] = Field(default=(), max_length=16)
+    recovery_of_position: int | None = Field(default=None, ge=0)
+    """Execute-owned source position for an artifact correction; PlanOutput rejects model input."""
 
 
 class PlanOutput(ThymiraModel):
     """THY's own structured planning output: an ordered, non-empty list of `AgentTask`s."""
 
     tasks: tuple[AgentTask, ...] = Field(min_length=1)
+    work_kind: Literal["general", "evaluate_existing", "train_new"] = "general"
+    source_model_id: str | None = None
+
+    @model_validator(mode="after")
+    def _reject_execute_owned_recovery_marker(self) -> PlanOutput:
+        """Keep the internal resume marker unavailable to the model-authored plan."""
+        if any(task.recovery_of_position is not None for task in self.tasks):
+            raise ValueError("recovery_of_position is reserved for Execute-generated corrections")
+        return self
+
+
+class ThyPlanReview(ThymiraModel):
+    """A planned candidate awaiting the exact human review requested by the Gate.
+
+    The candidate stays separate from ``ThyState.plan`` until Core validates an authenticated
+    answer. The Gate's existing approval-request event is the durable snapshot; these event
+    coordinates and digests let Core verify that snapshot again after a restart.
+    """
+
+    candidate: PlanOutput
+    decision: PolicyDecision
+    request_event_id: Id
+    request_event_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    candidate_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    scope_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    scope: dict[str, Any]
 
 
 class SynthesisNarrative(ThymiraModel):
@@ -225,6 +271,7 @@ class ThyInput(ThymiraModel):
 
     run: Run
     execution_constraints: ExecutionConstraints | None = None
+    execution_decision: PolicyDecision | None = None
 
 
 class ThyState(ThymiraModel):
@@ -246,6 +293,8 @@ class ThyState(ThymiraModel):
     run: Run
     phase: ThyPhase = ThyPhase.INSPECT
     plan: tuple[AgentTask, ...] = ()
+    pending_plan_review: ThyPlanReview | None = None
+    execution_decision: PolicyDecision | None = None
     completed: tuple[AgentTask, ...] = ()
     agent_messages: tuple[Task, ...] = ()
     usage: RunUsage = Field(default_factory=RunUsage)
@@ -266,6 +315,13 @@ class ThyState(ThymiraModel):
     rework_refusal: str | None = None
     single_rework: bool = False
     execution_constraints: ExecutionConstraints | None = None
+
+    @model_validator(mode="after")
+    def _pending_plan_is_not_executable(self) -> ThyState:
+        """Keep an unapproved candidate out of the executable seeded-plan shortcut."""
+        if self.pending_plan_review is not None and self.plan:
+            raise ValueError("a pending plan review cannot also be an executable plan")
+        return self
 
     def advance(self) -> ThyState:
         """Return a copy moved to the next phase.
@@ -299,6 +355,7 @@ class ThyOutput(ThymiraModel):
     """Set when the pass stopped on a task awaiting a human's answer (`ThyState.awaiting_approval`);
     the Core carries it into the next pass. `None` for a finished pass.
     """
+    pending_plan_review: ThyPlanReview | None = None
     usage: dict[str, int | float | None] = Field(default_factory=dict)
     """What the run charged, as `{requests, tokens, cost_usd}`.
 

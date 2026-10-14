@@ -37,6 +37,7 @@ from thymira.thy.agents.data_quality import (
     DataQualityReport,
     data_quality_agent_catalog,
 )
+from thymira.thy.agents.evaluation import evaluation_agent_catalog
 from thymira.thy.agents.experiment import (
     EXPERIMENT_AGENT_SPEC,
     ExperimentResult,
@@ -92,6 +93,7 @@ def full_agent_catalog() -> AgentCatalog:
         data_agent_catalog(),
         coding_agent_catalog(),
         experiment_agent_catalog(),
+        evaluation_agent_catalog(),
         statistics_agent_catalog(),
         data_quality_agent_catalog(),
         visualization_agent_catalog(),

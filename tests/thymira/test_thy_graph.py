@@ -12,12 +12,17 @@ from pydantic import BaseModel
 from pypdf import PdfWriter
 
 from tests.thymira.fixtures_agent_output import DataProfileOutput
-from tests.thymira.fixtures_tools import EchoArguments, FakeTool, review_gated_context
+from tests.thymira.fixtures_tools import (
+    EchoArguments,
+    FakeTool,
+    development_policy,
+    review_gated_context,
+)
 from thymira.agents import AgentCatalog, AgentSpec, LLMToolCall
 from thymira.agents.llm.routing import Role
 from thymira.agents.llm.scripted import ScriptedProvider
 from thymira.events import InMemoryEventLog
-from thymira.policies import ToolCapability
+from thymira.policies import Gate, PolicyEngine, RiskProfile, ToolCapability, auto_approve
 from thymira.schemas import ArtifactKind, EventType, ModelRoutePolicy, Run, TaskStatus, new_id
 from thymira.state import LocalArtifactStore
 from thymira.thy import (
@@ -32,7 +37,7 @@ from thymira.thy import (
 )
 from thymira.thy.graph import graph_definition_hash
 from thymira.thy.models import ThyState
-from thymira.tools import ToolRegistry
+from thymira.tools import ToolContext, ToolRegistry
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -127,8 +132,10 @@ def test_run_thy_signals_execute_before_post_execution_validation_failure() -> N
     assert execute_entries == [run.id]
 
 
-def test_run_thy_resolves_semantic_deliverables_by_declared_kind(tmp_path: Path) -> None:
-    """A plan's semantic deliverable names resolve to the run's typed artifacts."""
+def test_run_thy_does_not_erase_failed_task_with_preexisting_semantic_deliverables(
+    tmp_path: Path,
+) -> None:
+    """Run-wide matching artifacts cannot replace task-owned completion evidence."""
     run = _run()
     log = InMemoryEventLog(run.id)
     store = LocalArtifactStore(tmp_path / "artifacts", run.id)
@@ -181,7 +188,8 @@ def test_run_thy_resolves_semantic_deliverables_by_declared_kind(tmp_path: Path)
         route_policy=TEST_ROUTE_POLICY,
     )
 
-    assert output.error is None
+    assert output.error is not None
+    assert output.error.startswith("data failed: required artifact 'trained model'")
     assert output.missing_artifacts == ()
 
 
@@ -353,7 +361,7 @@ def test_run_thy_rejects_a_required_mime_that_contradicts_the_filename(
     assert output.missing_artifacts == ("report.pdf",)
 
 
-def test_run_thy_accepts_the_exact_artifact_with_the_required_kind_and_media_type(
+def test_run_thy_preserves_dispatch_failure_even_when_exact_artifact_is_valid(
     tmp_path: Path,
 ) -> None:
     run = _run()
@@ -388,7 +396,9 @@ def test_run_thy_accepts_the_exact_artifact_with_the_required_kind_and_media_typ
         initial_state=ThyState(run=run, plan=(task,)),
     )
 
-    assert output.error is None
+    assert output.error == (
+        "data failed: unknown agent 'data': this run's catalog registers no agents"
+    )
     assert output.missing_artifacts == ()
 
 
@@ -596,13 +606,15 @@ def test_run_thy_reuses_a_precompiled_graph_when_passed_one() -> None:
     assert output.summary == "not yet implemented"
 
 
-def _data_agent_catalog(*, tool_allowlist: tuple[str, ...] = ()) -> AgentCatalog:
+def _data_agent_catalog(
+    *, tool_allowlist: tuple[str, ...] = (), max_turns: int = 2
+) -> AgentCatalog:
     spec = AgentSpec(
         name="data",
         role=Role.AGENT,
         task_kinds=("analyze",),
         tool_allowlist=tool_allowlist,
-        max_turns=2,
+        max_turns=max_turns,
         max_depth=1,
         system_prompt_ref="p",
         output_schema_ref="s",
@@ -641,15 +653,17 @@ def test_a_run_driven_by_scripted_agents_traverses_every_phase_and_yields_a_thy_
     assert len(message_events) == 1
 
 
-def test_run_thy_prefixes_missing_artifacts_with_the_first_failed_tasks_diagnosis() -> None:
+def test_run_thy_reports_provider_error_separately_from_missing_artifacts(
+    tmp_path: Path,
+) -> None:
     """The halt message names the real cause, not just the deliverable check it also failed.
 
-    A registered agent's own failure (here, ``max_turns`` exhausted) is the real cause.
+    Exhausting the scripted provider is a provider failure, not ``max_turns``.
     """
     catalog = _data_agent_catalog()
     run = _run()
     log = InMemoryEventLog(run.id)
-    provider = ScriptedProvider([])  # exhausted on the agent's very first call
+    provider = ScriptedProvider([])  # one request fails before any usable model response
     plan = (
         AgentTask(
             id="t1",
@@ -669,6 +683,72 @@ def test_run_thy_prefixes_missing_artifacts_with_the_first_failed_tasks_diagnosi
         initial_state=ThyState(run=run, plan=plan),
     )
 
+    completed = next(event for event in log.events() if event.type is EventType.AGENT_COMPLETED)
+    assert completed.payload["end_reason"] == "provider_error"
+    assert len(provider.calls) == 1
+    assert output.error == (
+        "data failed: LLM provider request failed before a usable response was received. "
+        "Check the provider configuration and tool schemas before retrying.; "
+        "required artifacts missing: profile.json"
+    )
+    assert output.missing_artifacts == ("profile.json",)
+
+
+def test_run_thy_reports_real_request_limit_as_max_turns_before_missing_artifacts(
+    tmp_path: Path,
+) -> None:
+    catalog = _data_agent_catalog(tool_allowlist=("echo",), max_turns=1)
+    run = _run()
+    log = InMemoryEventLog(run.id)
+    store = LocalArtifactStore(tmp_path / "artifacts", run.id)
+    context = ToolContext(
+        run_id=run.id,
+        agent_id=new_id("agent"),
+        workspace=tmp_path / "workspace",
+        event_log=log,
+        gate=Gate(PolicyEngine(development_policy()), log, approver=auto_approve),
+        artifact_store=store,
+        risk_profile=RiskProfile(
+            risk_level="limited", activity_category="analysis", confidence=1.0
+        ),
+    )
+    echo = FakeTool(
+        "echo", ToolCapability(id="echo", external_effects=()), arguments_model=EchoArguments
+    )
+    provider = ScriptedProvider(
+        [
+            LLMToolCall(id="valid-tool", name="echo", arguments={"value": "ran"}),
+            DataProfileOutput(row_count=1, columns=("value",)),
+        ]
+    )
+    plan = (
+        AgentTask(
+            id="t1",
+            agent=ThyAgentKind.DATA,
+            phase=ThyPhase.EXECUTE,
+            instruction="profile it",
+            required_artifacts=(ArtifactRequirement(name="profile.json"),),
+        ),
+    )
+
+    output = run_thy(
+        ThyInput(run=run),
+        catalog,
+        log,
+        provider=provider,
+        tool_registry=ToolRegistry((echo,)),
+        tool_context=context,
+        route_policy=TEST_ROUTE_POLICY,
+        initial_state=ThyState(run=run, plan=plan),
+    )
+
+    completed = next(event for event in log.events() if event.type is EventType.AGENT_COMPLETED)
+    assert completed.payload["end_reason"] == "max_turns"
+    assert len(provider.calls) == 1
+    assert any(
+        event.type is EventType.TOOL_COMPLETED and event.payload.get("status") == "COMPLETED"
+        for event in log.events()
+    )
     assert output.error == (
         "data failed: agent exceeded max_turns; required artifacts missing: profile.json"
     )

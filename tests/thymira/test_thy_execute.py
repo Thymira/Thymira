@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
 from tests.thymira.fixtures_agent_output import DataProfileOutput
-from tests.thymira.fixtures_tools import EchoArguments, FakeTool, review_gated_context
+from tests.thymira.fixtures_tools import (
+    EchoArguments,
+    FakeTool,
+    development_policy,
+    review_gated_context,
+)
 from thymira.agents import AgentCatalog, LLMToolCall, load_agent_specs
 from thymira.agents.llm.scripted import ScriptedProvider
 from thymira.events import InMemoryEventLog, current_surface, verify_events
@@ -29,18 +34,29 @@ from thymira.schemas import (
     ExperimentStatus,
     ModelRoutePolicy,
     Run,
+    SandboxMode,
     StopReason,
     Task,
     TaskStatus,
     new_id,
 )
 from thymira.state import LocalArtifactStore
+from thymira.thy.agents.coding import coding_agent_catalog
 from thymira.thy.agents.experiment import ExperimentResult
 from thymira.thy.agents.ml import MLResult, TuningResult
-from thymira.thy.graph import build_thy_graph
-from thymira.thy.models import AgentTask, ArtifactRequirement, ThyAgentKind, ThyPhase, ThyState
+from thymira.thy.graph import build_thy_graph, run_thy
+from thymira.thy.models import (
+    AgentTask,
+    ArtifactRequirement,
+    ThyAgentKind,
+    ThyInput,
+    ThyPhase,
+    ThyProgress,
+    ThyState,
+)
 from thymira.thy.nodes.execute import _delegation_instruction
-from thymira.tools import ToolContext, ToolRegistry
+from thymira.tools import Tool, ToolContext, ToolRegistry
+from thymira.tools.builtins import ExportPdf, ReadFile, RunNotebook, RunPython, WriteFile
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -126,6 +142,10 @@ def test_delegation_instruction_names_each_required_artifact_and_kind() -> None:
     assert instruction.startswith(task.instruction)
     assert 'german_credit_eda_report.md (kind="report")' in instruction
     assert 'model.joblib (kind="model")' in instruction
+    assert "Only an exact workspace-relative path, kind, and declared media type satisfies" in (
+        instruction
+    )
+    assert "at most one targeted corrective attempt" in instruction
 
 
 def test_delegation_instruction_names_a_declared_media_type() -> None:
@@ -151,6 +171,705 @@ def test_delegation_instruction_names_a_declared_media_type() -> None:
     instruction = _delegation_instruction(task)
 
     assert 'duration.png (kind="other", media_type="image/png")' in instruction
+
+
+def test_model_authored_task_using_recovery_prefix_is_dispatched_normally(tmp_path: Path) -> None:
+    run = _run()
+    log = InMemoryEventLog(run.id)
+    task = _task("thy-artifact-recovery-user")
+    provider = ScriptedProvider([DataProfileOutput(row_count=1, columns=("a",))])
+    graph = build_thy_graph(
+        _data_agent_catalog(tmp_path), log, provider=provider, route_policy=TEST_ROUTE_POLICY
+    )
+
+    final_state = ThyState.model_validate(graph.invoke(ThyState(run=run, plan=(task,))))
+
+    assert final_state.completed == (task,)
+    assert final_state.agent_messages[0].status is TaskStatus.COMPLETED
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("publish_after_feedback", "max_turns"), [(True, 40), (False, 40), (False, 3)]
+)
+def test_unpublished_python_plot_gets_one_task_owned_publication_correction(
+    tmp_path: Path, publish_after_feedback: bool, max_turns: int
+) -> None:
+    run = _run()
+    log = InMemoryEventLog(run.id)
+    store = LocalArtifactStore(tmp_path / "artifacts", run.id)
+    context = ToolContext(
+        run_id=run.id,
+        agent_id=new_id("agent"),
+        workspace=tmp_path / "workspace",
+        event_log=log,
+        gate=Gate(PolicyEngine(development_policy()), log, approver=auto_approve),
+        artifact_store=store,
+        risk_profile=RiskProfile(
+            risk_level="limited", activity_category="analysis", confidence=1.0
+        ),
+    )
+    registry = ToolRegistry(
+        (
+            cast("Tool", RunPython(mode=SandboxMode.DANGER_FULL_ACCESS)),
+            cast("Tool", ReadFile()),
+            cast("Tool", ExportPdf()),
+            cast("Tool", RunNotebook(mode=SandboxMode.DANGER_FULL_ACCESS)),
+            cast("Tool", WriteFile()),
+        )
+    )
+    script = (
+        "import json\n"
+        "from pathlib import Path\n"
+        "from PIL import Image\n"
+        "Image.new('RGB', (2, 2), 'blue').save('plot.png')\n"
+        "Path('outputs.json').write_text(json.dumps("
+        "[{'path': 'plot.png', 'kind': 'plot'}]))\n"
+    )
+
+    def execute_source(_messages: object) -> LLMToolCall:
+        source = store.get("eda.py")
+        assert source is not None
+        return LLMToolCall(
+            id="unpublished-python",
+            name="run_python",
+            arguments={
+                "source_artifact_id": source.id,
+                "description": "Render the exploratory plot",
+            },
+        )
+
+    def publish_source(messages: object) -> LLMToolCall:
+        assert "output_manifest_path" in str(messages)
+        source = store.get("eda.py")
+        assert source is not None
+        return LLMToolCall(
+            id="publish-python",
+            name="run_python",
+            arguments={
+                "source_artifact_id": source.id,
+                "description": "Publish the generated exploratory plot",
+                "output_manifest_path": "outputs-repair.json",
+            },
+        )
+
+    final_result = LLMToolCall(
+        id="plot-result",
+        name="final_result",
+        arguments={"stdout": "created plot", "exit_code": 0, "artifacts": ["plot.png"]},
+    )
+    provider = ScriptedProvider(
+        [
+            LLMToolCall(
+                id="write-source",
+                name="write_file",
+                arguments={
+                    "path": "eda.py",
+                    "kind": "code",
+                    "content": script,
+                    "description": "Write the exploratory plotting script",
+                },
+            ),
+            execute_source,
+            final_result,
+            *(
+                [
+                    LLMToolCall(
+                        id="correct-publication-source",
+                        name="write_file",
+                        arguments={
+                            "path": "eda.py",
+                            "kind": "code",
+                            "content": script.replace("outputs.json", "outputs-repair.json"),
+                            "description": "Write a fresh publication manifest on execution",
+                        },
+                    ),
+                    publish_source,
+                    final_result,
+                ]
+                if publish_after_feedback
+                else [final_result]
+            ),
+        ]
+    )
+    task = AgentTask(
+        id="eda-plots",
+        agent=ThyAgentKind.CODING,
+        phase=ThyPhase.EXECUTE,
+        instruction="Generate and publish the exploratory plot.",
+    )
+    original_catalog = coding_agent_catalog()
+    catalog = AgentCatalog(
+        (original_catalog.get("coding").model_copy(update={"max_turns": max_turns}),),
+        system_prompts={"coding": original_catalog.system_prompt("coding")},
+        output_schemas={"coding": original_catalog.output_schema("coding")},
+    )
+    output = run_thy(
+        ThyInput(run=run),
+        catalog,
+        log,
+        provider=provider,
+        artifact_store=store,
+        tool_registry=registry,
+        tool_context=context,
+        initial_state=ThyState(run=run, plan=(task,)),
+        route_policy=TEST_ROUTE_POLICY,
+    )
+
+    assert store.get("eda.py") is not None, [(event.type, event.payload) for event in log.events()]
+    assert (store.get("plot.png") is not None) is publish_after_feedback, "\n".join(
+        str(event.payload)
+        for event in log.events()
+        if event.type in {EventType.TOOL_COMPLETED, EventType.AGENT_COMPLETED}
+    )
+    assert (output.error is None) is publish_after_feedback
+    assert (context.workspace / "plot.png").is_file()
+    assert store.verify() == []
+    assert verify_events(log.events()).valid
+    feedback = [
+        event
+        for event in log.events()
+        if event.type is EventType.AGENT_MESSAGE
+        and event.payload.get("form") == "python_publication_feedback"
+    ]
+    assert len(feedback) == (0 if max_turns == 3 else 1)
+    assert len(provider.calls) == (3 if max_turns == 3 else 6 if publish_after_feedback else 4)
+
+
+@pytest.mark.parametrize("publish_exact_output", [True, False])
+def test_completed_task_gets_one_bounded_correction_for_a_required_plot_at_the_wrong_path(
+    tmp_path: Path, publish_exact_output: bool
+) -> None:
+    run = _run()
+    log = InMemoryEventLog(run.id)
+    store = LocalArtifactStore(tmp_path / "artifacts", run.id)
+    context = ToolContext(
+        run_id=run.id,
+        agent_id=new_id("agent"),
+        workspace=tmp_path / "workspace",
+        event_log=log,
+        gate=Gate(PolicyEngine(development_policy()), log, approver=auto_approve),
+        artifact_store=store,
+        risk_profile=RiskProfile(
+            risk_level="limited", activity_category="analysis", confidence=1.0
+        ),
+    )
+    registry = ToolRegistry(
+        (
+            cast("Tool", RunPython(mode=SandboxMode.DANGER_FULL_ACCESS)),
+            cast("Tool", ReadFile()),
+            cast("Tool", ExportPdf()),
+            cast("Tool", RunNotebook(mode=SandboxMode.DANGER_FULL_ACCESS)),
+            cast("Tool", WriteFile()),
+        )
+    )
+    wrong_script = (
+        "from pathlib import Path\n"
+        "from PIL import Image\n"
+        "path = Path('data/eda_plots.png')\n"
+        "path.parent.mkdir(parents=True, exist_ok=True)\n"
+        "Image.new('RGB', (2, 2), 'red').save(path)\n"
+    )
+    correct_script = (
+        "from pathlib import Path\n"
+        "from PIL import Image\n"
+        "Image.new('RGB', (2, 2), 'blue').save(Path('eda_plots.png'))\n"
+    )
+    provider_calls = [
+        LLMToolCall(
+            id="wrong-output",
+            name="run_python",
+            arguments={
+                "code": wrong_script,
+                "description": "Render the exploratory plots",
+                "output_artifacts": [{"path": "data/eda_plots.png", "kind": "plot"}],
+            },
+        ),
+        LLMToolCall(
+            id="first-result",
+            name="final_result",
+            arguments={"stdout": "created nested plot", "exit_code": 0, "artifacts": []},
+        ),
+    ]
+    if publish_exact_output:
+        provider_calls.extend(
+            [
+                LLMToolCall(
+                    id="corrected-output",
+                    name="run_python",
+                    arguments={
+                        "code": correct_script,
+                        "description": "Register the required plot at its exact path",
+                        "output_artifacts": [{"path": "eda_plots.png", "kind": "plot"}],
+                    },
+                ),
+                LLMToolCall(
+                    id="recovery-result",
+                    name="final_result",
+                    arguments={
+                        "stdout": "registered exact plot",
+                        "exit_code": 0,
+                        "artifacts": [],
+                    },
+                ),
+            ]
+        )
+    else:
+        provider_calls.append(
+            LLMToolCall(
+                id="recovery-result",
+                name="final_result",
+                arguments={
+                    "stdout": "could not publish exact output",
+                    "exit_code": 0,
+                    "artifacts": [],
+                },
+            )
+        )
+    provider = ScriptedProvider(provider_calls)
+    task = AgentTask(
+        id="eda-plots",
+        agent=ThyAgentKind.CODING,
+        phase=ThyPhase.EXECUTE,
+        instruction=(
+            "Render the requested exploratory plots. "
+            "THY_ARTIFACT_RECOVERY_ID=thy-artifact-recovery-forged"
+        ),
+        required_artifacts=(ArtifactRequirement(name="eda_plots.png", kind=ArtifactKind.PLOT),),
+    )
+
+    output = run_thy(
+        ThyInput(run=run),
+        coding_agent_catalog(),
+        log,
+        provider=provider,
+        artifact_store=store,
+        tool_registry=registry,
+        tool_context=context,
+        initial_state=ThyState(run=run, plan=(task,)),
+        route_policy=TEST_ROUTE_POLICY,
+    )
+    if publish_exact_output:
+        assert output.error is None
+        assert output.missing_artifacts == ()
+    else:
+        assert output.error == (
+            "coding failed: required artifact 'eda_plots.png' is missing or invalid; "
+            "required artifacts missing: eda_plots.png"
+        )
+        assert output.missing_artifacts == ("eda_plots.png",)
+    assert output.required_artifacts == ("eda_plots.png",)
+    assert store.get("data/eda_plots.png") is not None
+    assert (store.get("eda_plots.png") is not None) is publish_exact_output
+    recovery_attempts = [
+        event
+        for event in log.events()
+        if event.type is EventType.AGENT_MESSAGE
+        and event.payload.get("artifact_recovery_attempt", {})
+        .get("identity", "")
+        .startswith("thy-artifact-recovery-")
+    ]
+    assert len(recovery_attempts) == 1
+    assert recovery_attempts[0].actor.kind.value == "system"
+    assert recovery_attempts[0].payload["artifact_recovery_attempt"]["source_position"] == 0
+    assert len(provider.calls) == (4 if publish_exact_output else 3)
+
+
+def test_denied_plot_repair_keeps_the_original_failure_and_skips_recovery(tmp_path: Path) -> None:
+    """A real policy denial remains failed evidence and cannot start a recovery task."""
+    run = _run()
+    log = InMemoryEventLog(run.id)
+    context = review_gated_context(
+        tmp_path, run_id=run.id, log=log, engine=PolicyEngine(development_policy())
+    )
+    store = context.artifact_store
+    assert store is not None
+    registry = ToolRegistry(
+        (
+            cast("Tool", RunPython(mode=SandboxMode.DANGER_FULL_ACCESS)),
+            cast("Tool", ReadFile()),
+            cast("Tool", ExportPdf()),
+            cast("Tool", RunNotebook(mode=SandboxMode.DANGER_FULL_ACCESS)),
+            cast("Tool", WriteFile()),
+        )
+    )
+    wrong_script = (
+        "from pathlib import Path\n"
+        "from PIL import Image\n"
+        "path = Path('data/eda_plots.png')\n"
+        "path.parent.mkdir(parents=True, exist_ok=True)\n"
+        "Image.new('RGB', (2, 2), 'red').save(path)\n"
+    )
+    exact_script = (
+        "from pathlib import Path\n"
+        "from PIL import Image\n"
+        "Image.new('RGB', (2, 2), 'blue').save(Path('eda_plots.png'))\n"
+    )
+    task = AgentTask(
+        id="eda-plots",
+        agent=ThyAgentKind.CODING,
+        phase=ThyPhase.EXECUTE,
+        instruction="Render the requested exploratory plots.",
+        required_artifacts=(ArtifactRequirement(name="eda_plots.png", kind=ArtifactKind.PLOT),),
+    )
+
+    first_provider = ScriptedProvider(
+        [
+            LLMToolCall(
+                id="original-plot",
+                name="run_python",
+                arguments={
+                    "code": wrong_script,
+                    "description": "Create the requested plots",
+                    "output_artifacts": [{"path": "data/eda_plots.png", "kind": "plot"}],
+                },
+            )
+        ]
+    )
+    parked = run_thy(
+        ThyInput(run=run),
+        coding_agent_catalog(),
+        log,
+        provider=first_provider,
+        artifact_store=store,
+        tool_registry=registry,
+        tool_context=context,
+        initial_state=ThyState(run=run, plan=(task,)),
+        route_policy=TEST_ROUTE_POLICY,
+    )
+    assert parked.progress is not None, parked.error
+
+    first_decision = [
+        event.payload["decision_id"]
+        for event in log.events()
+        if event.type is EventType.HUMAN_APPROVAL_REQUESTED
+    ][-1]
+    _human_answer(context, first_decision, approved=True)
+    resume_provider = ScriptedProvider(
+        [
+            LLMToolCall(
+                id="repair-plot",
+                name="run_python",
+                arguments={
+                    "code": exact_script,
+                    "description": "Publish the exact planned plot path",
+                    "output_artifacts": [{"path": "eda_plots.png", "kind": "plot"}],
+                },
+            ),
+        ]
+    )
+    correction_parked = run_thy(
+        ThyInput(run=run),
+        coding_agent_catalog(),
+        log,
+        provider=resume_provider,
+        artifact_store=store,
+        tool_registry=registry,
+        tool_context=context,
+        initial_state=ThyState(
+            run=run,
+            plan=parked.progress.plan,
+            completed=parked.progress.completed,
+            agent_messages=parked.progress.agent_messages,
+            experiments=parked.progress.experiments,
+            artifacts=parked.progress.artifacts,
+        ),
+        route_policy=TEST_ROUTE_POLICY,
+    )
+
+    assert correction_parked.progress is not None
+    second_decision = [
+        event.payload["decision_id"]
+        for event in log.events()
+        if event.type is EventType.HUMAN_APPROVAL_REQUESTED
+    ][-1]
+    _human_answer(context, second_decision, approved=False)
+    failed_after_denial = run_thy(
+        ThyInput(run=run),
+        coding_agent_catalog(),
+        log,
+        provider=ScriptedProvider(
+            [
+                LLMToolCall(
+                    id="final-after-denial",
+                    name="final_result",
+                    arguments={"stdout": "repair was denied", "exit_code": 0, "artifacts": []},
+                )
+            ]
+        ),
+        artifact_store=store,
+        tool_registry=registry,
+        tool_context=context,
+        initial_state=ThyState(
+            run=run,
+            plan=correction_parked.progress.plan,
+            completed=correction_parked.progress.completed,
+            agent_messages=correction_parked.progress.agent_messages,
+            experiments=correction_parked.progress.experiments,
+            artifacts=correction_parked.progress.artifacts,
+        ),
+        route_policy=TEST_ROUTE_POLICY,
+    )
+    assert failed_after_denial.progress is None
+    assert failed_after_denial.error is not None
+    assert "tool call denied" in failed_after_denial.error
+    original_completion = next(
+        event
+        for event in reversed(log.events())
+        if event.type is EventType.AGENT_COMPLETED
+        and event.payload.get("completion_evidence", {}).get("plan_task_id") == "eda-plots"
+    )
+    assert original_completion.payload["status"] == TaskStatus.FAILED.value
+    assert original_completion.payload["completion_evidence"]["unresolved_tool_call_ids"]
+    assert not any(
+        event.type is EventType.AGENT_MESSAGE
+        and isinstance(event.payload.get("artifact_recovery_attempt"), dict)
+        for event in log.events()
+    )
+    unresolved_ids = set(
+        original_completion.payload["completion_evidence"]["unresolved_tool_call_ids"]
+    )
+    denied_attempts = [
+        event
+        for event in log.events()
+        if event.type is EventType.TOOL_DENIED
+        and event.payload.get("tool") == "run_python"
+        and event.payload.get("tool_call_id") in unresolved_ids
+    ]
+    assert denied_attempts
+    assert store.get("eda_plots.png") is None
+
+
+def test_only_published_plot_failure_gets_a_correction_after_approval_resumes(
+    tmp_path: Path,
+) -> None:
+    run = _run()
+    log = InMemoryEventLog(run.id)
+    context = review_gated_context(
+        tmp_path, run_id=run.id, log=log, engine=PolicyEngine(development_policy())
+    )
+    store = context.artifact_store
+    assert store is not None
+    registry = ToolRegistry(
+        (
+            cast("Tool", RunPython(mode=SandboxMode.DANGER_FULL_ACCESS)),
+            cast("Tool", ReadFile()),
+            cast("Tool", ExportPdf()),
+            cast("Tool", RunNotebook(mode=SandboxMode.DANGER_FULL_ACCESS)),
+            cast("Tool", WriteFile()),
+        )
+    )
+    wrong_script = (
+        "from pathlib import Path\n"
+        "from PIL import Image\n"
+        "path = Path('data/a.png')\n"
+        "path.parent.mkdir(parents=True, exist_ok=True)\n"
+        "Image.new('RGB', (2, 2), 'red').save(path)\n"
+    )
+    exact_script = (
+        "from pathlib import Path\n"
+        "from PIL import Image\n"
+        "Image.new('RGB', (2, 2), 'blue').save(Path('a.png'))\n"
+    )
+    tasks = (
+        AgentTask(
+            id="first-plot",
+            agent=ThyAgentKind.CODING,
+            phase=ThyPhase.EXECUTE,
+            instruction="Create plot A.",
+            required_artifacts=(ArtifactRequirement(name="a.png", kind=ArtifactKind.PLOT),),
+        ),
+        AgentTask(
+            id="second-plot",
+            agent=ThyAgentKind.CODING,
+            phase=ThyPhase.EXECUTE,
+            instruction="Create plot B.",
+            required_artifacts=(ArtifactRequirement(name="b.png", kind=ArtifactKind.PLOT),),
+        ),
+    )
+    first_provider = ScriptedProvider(
+        [
+            LLMToolCall(
+                id="first-original-plot",
+                name="run_python",
+                arguments={
+                    "code": wrong_script,
+                    "description": "Create plot A",
+                    "output_artifacts": [{"path": "data/a.png", "kind": "plot"}],
+                },
+            )
+        ]
+    )
+    parked = run_thy(
+        ThyInput(run=run),
+        coding_agent_catalog(),
+        log,
+        provider=first_provider,
+        artifact_store=store,
+        tool_registry=registry,
+        tool_context=context,
+        initial_state=ThyState(run=run, plan=tasks),
+        route_policy=TEST_ROUTE_POLICY,
+    )
+    assert parked.progress is not None, parked.error
+    first_decision = [
+        event.payload["decision_id"]
+        for event in log.events()
+        if event.type is EventType.HUMAN_APPROVAL_REQUESTED
+    ][-1]
+    _human_answer(context, first_decision, approved=True)
+
+    correction_code = LLMToolCall(
+        id="first-correction-plot",
+        name="run_python",
+        arguments={
+            "code": exact_script,
+            "description": "Publish plot A at its exact path",
+            "output_artifacts": [{"path": "a.png", "kind": "plot"}],
+        },
+    )
+    correction_parked = run_thy(
+        ThyInput(run=run),
+        coding_agent_catalog(),
+        log,
+        provider=ScriptedProvider(
+            [
+                LLMToolCall(
+                    id="first-original-finished",
+                    name="final_result",
+                    arguments={"stdout": "created nested plot A", "exit_code": 0, "artifacts": []},
+                ),
+                LLMToolCall(
+                    id="second-original-finished",
+                    name="final_result",
+                    arguments={
+                        "stdout": "plot B was not registered",
+                        "exit_code": 0,
+                        "artifacts": [],
+                    },
+                ),
+                correction_code,
+            ]
+        ),
+        artifact_store=store,
+        tool_registry=registry,
+        tool_context=context,
+        initial_state=ThyState(
+            run=run,
+            plan=parked.progress.plan,
+            completed=parked.progress.completed,
+            agent_messages=parked.progress.agent_messages,
+            experiments=parked.progress.experiments,
+            artifacts=parked.progress.artifacts,
+        ),
+        route_policy=TEST_ROUTE_POLICY,
+    )
+    assert correction_parked.progress is not None
+    first_recovery = next(
+        task for task in correction_parked.progress.plan if task.recovery_of_position == 0
+    )
+    progress_path = tmp_path / "parked-plot-correction-progress.json"
+    progress_path.write_text(correction_parked.progress.model_dump_json(), encoding="utf-8")
+    resumed_progress = ThyProgress.model_validate_json(progress_path.read_text(encoding="utf-8"))
+    resumed_recovery = next(
+        task for task in resumed_progress.plan if task.recovery_of_position == 0
+    )
+    assert resumed_recovery.id == first_recovery.id
+    assert resumed_recovery.recovery_of_position == first_recovery.recovery_of_position == 0
+    original_pending = next(
+        event
+        for event in log.events()
+        if event.type is EventType.TOOL_DENIED
+        and event.payload.get("ticket_outcome") == "pending"
+        and event.payload.get("decision_id") == first_decision
+    )
+    approved_continuation = [
+        event
+        for event in log.events()
+        if event.type is EventType.TOOL_STARTED
+        and event.payload.get("decision_id") == first_decision
+    ]
+    assert len(approved_continuation) == 1
+    assert (
+        original_pending.payload["tool_call_id"] != approved_continuation[0].payload["tool_call_id"]
+    )
+    assert (
+        original_pending.payload["tool_intent_sha256"]
+        == approved_continuation[0].payload["tool_intent_sha256"]
+    )
+    assert any(task.recovery_of_position == 0 for task in resumed_progress.plan)
+    correction_decision = [
+        event.payload["decision_id"]
+        for event in log.events()
+        if event.type is EventType.HUMAN_APPROVAL_REQUESTED
+    ][-1]
+    _human_answer(context, correction_decision, approved=True)
+
+    final = run_thy(
+        ThyInput(run=run),
+        coding_agent_catalog(),
+        log,
+        provider=ScriptedProvider(
+            [
+                LLMToolCall(
+                    id="first-correction-finished",
+                    name="final_result",
+                    arguments={"stdout": "registered plot A", "exit_code": 0, "artifacts": []},
+                ),
+                LLMToolCall(
+                    id="second-correction-finished",
+                    name="final_result",
+                    arguments={
+                        "stdout": "could not register plot B",
+                        "exit_code": 0,
+                        "artifacts": [],
+                    },
+                ),
+            ]
+        ),
+        artifact_store=store,
+        tool_registry=registry,
+        tool_context=context,
+        initial_state=ThyState(
+            run=run,
+            plan=resumed_progress.plan,
+            completed=resumed_progress.completed,
+            agent_messages=resumed_progress.agent_messages,
+            experiments=resumed_progress.experiments,
+            artifacts=resumed_progress.artifacts,
+        ),
+        route_policy=TEST_ROUTE_POLICY,
+    )
+
+    attempts = [
+        event.payload["artifact_recovery_attempt"]
+        for event in log.events()
+        if event.type is EventType.AGENT_MESSAGE
+        and event.actor.kind.value == "system"
+        and isinstance(event.payload.get("artifact_recovery_attempt"), dict)
+    ]
+    assert final.error == (
+        "coding failed: required artifact 'b.png' is missing or invalid; "
+        "required artifacts missing: b.png"
+    )
+    assert store.get("a.png") is not None
+    assert len(attempts) == 1
+    assert [attempt["source_position"] for attempt in attempts] == [0]
+    assert len({attempt["identity"] for attempt in attempts}) == 1
+    original_completion = next(
+        event
+        for event in log.events()
+        if event.type is EventType.AGENT_COMPLETED
+        and event.payload.get("completion_evidence", {}).get("plan_task_id") == "first-plot"
+    )
+    recovery_completion = next(
+        event
+        for event in log.events()
+        if event.type is EventType.AGENT_COMPLETED
+        and event.payload.get("completion_evidence", {}).get("plan_task_id") == first_recovery.id
+    )
+    assert original_completion.payload["status"] == TaskStatus.FAILED.value
+    assert recovery_completion.payload["status"] == TaskStatus.COMPLETED.value
 
 
 def test_three_scripted_tasks_run_in_order_and_complete(tmp_path: Path) -> None:
@@ -195,6 +914,168 @@ def test_a_task_whose_dependency_failed_is_skipped(tmp_path: Path) -> None:
     assert second.status is TaskStatus.SKIPPED
     # Exactly the one attempt for "t1" -- "t2" is skipped without ever asking the provider.
     assert len(provider.calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("repair_source", "explore_unrelated_path"),
+    [(False, False), (True, False), (True, True)],
+)
+def test_required_source_settlement_controls_its_real_dependency(
+    tmp_path: Path, repair_source: bool, explore_unrelated_path: bool
+) -> None:
+    """Required delivery gates dependencies; only explicit unrelated exploration is ignored."""
+    run = _run()
+    log = InMemoryEventLog(run.id)
+    store = LocalArtifactStore(tmp_path / "artifacts", run.id)
+    context = ToolContext(
+        run_id=run.id,
+        agent_id=new_id("agent"),
+        workspace=tmp_path / "workspace",
+        event_log=log,
+        gate=Gate(PolicyEngine(development_policy()), log, approver=auto_approve),
+        artifact_store=store,
+        risk_profile=RiskProfile(
+            risk_level="limited", activity_category="analysis", confidence=1.0
+        ),
+    )
+    registry = ToolRegistry(
+        (
+            cast("Tool", WriteFile()),
+            cast("Tool", RunPython(mode=SandboxMode.DANGER_FULL_ACCESS)),
+            cast("Tool", ReadFile()),
+            cast("Tool", ExportPdf()),
+            cast("Tool", RunNotebook(mode=SandboxMode.DANGER_FULL_ACCESS)),
+        )
+    )
+    source_task = AgentTask(
+        id="source-task",
+        agent=ThyAgentKind.CODING,
+        phase=ThyPhase.EXECUTE,
+        instruction="Write analysis.py.",
+        required_artifacts=(ArtifactRequirement(name="analysis.py", kind=ArtifactKind.CODE),),
+    )
+    dependent_task = AgentTask(
+        id="dependent-task",
+        agent=ThyAgentKind.CODING,
+        phase=ThyPhase.EXECUTE,
+        instruction="Continue after analysis.py exists.",
+        depends_on=(source_task.id,),
+    )
+    responses: list[LLMToolCall] = []
+    if explore_unrelated_path:
+        responses.append(
+            LLMToolCall(
+                id="failed-exploration",
+                name="write_file",
+                arguments={
+                    "path": "notes.py",
+                    "kind": "code",
+                    "content": r"import pandas as pd\nprint('invalid exploration')",
+                    "description": "Try unrelated exploratory source",
+                },
+            )
+        )
+    responses.append(
+        LLMToolCall(
+            id="invalid-source",
+            name="write_file",
+            arguments={
+                "path": "analysis.py",
+                "kind": "code",
+                "content": r"import pandas as pd\nprint('invalid')",
+                "description": "Attempt the required source",
+            },
+        )
+    )
+    if repair_source:
+        responses.append(
+            LLMToolCall(
+                id="repair-source",
+                name="write_file",
+                arguments={
+                    "path": "analysis.py",
+                    "kind": "code",
+                    "content": "print('repaired')",
+                    "description": "Repair the required source at its planned path",
+                },
+            )
+        )
+    else:
+        responses.append(
+            LLMToolCall(
+                id="independent-b",
+                name="write_file",
+                arguments={
+                    "path": "independent.py",
+                    "kind": "code",
+                    "content": "print('independent B')",
+                    "description": "Write independent source B",
+                },
+            )
+        )
+    responses.append(
+        LLMToolCall(
+            id="source-result",
+            name="final_result",
+            arguments={
+                "stdout": "source settled",
+                "exit_code": 0,
+                "artifacts": ["analysis.py"] if repair_source else [],
+            },
+        )
+    )
+    if repair_source:
+        responses.append(
+            LLMToolCall(
+                id="dependent-result",
+                name="final_result",
+                arguments={"stdout": "dependent work settled", "exit_code": 0, "artifacts": []},
+            )
+        )
+    provider = ScriptedProvider(responses)
+    output = run_thy(
+        ThyInput(run=run),
+        coding_agent_catalog(),
+        log,
+        provider=provider,
+        artifact_store=store,
+        tool_registry=registry,
+        tool_context=context,
+        initial_state=ThyState(run=run, plan=(source_task, dependent_task)),
+        route_policy=TEST_ROUTE_POLICY,
+    )
+
+    starts = [event for event in log.events() if event.type is EventType.AGENT_STARTED]
+    completions = [
+        event
+        for event in log.events()
+        if event.type is EventType.AGENT_COMPLETED
+        and event.payload.get("completion_evidence", {}).get("plan_task_id") == source_task.id
+    ]
+    assert completions, (
+        f"output={output.error!r}; provider_calls={provider.calls!r}; "
+        f"events={[(event.type, event.payload) for event in log.events()]!r}"
+    )
+    completion = completions[0]
+    if repair_source:
+        assert output.error is None
+        assert output.missing_artifacts == ()
+        assert store.get("analysis.py") is not None
+        assert len(starts) == 2
+        assert len(provider.calls) == 4 + int(explore_unrelated_path)
+        assert len(completion.payload["completion_evidence"]["ignored_tool_call_ids"]) == (
+            1 if explore_unrelated_path else 0
+        )
+        assert len(completion.payload["completion_evidence"]["repaired_tool_call_ids"]) == 1
+    else:
+        assert output.error is not None
+        assert "analysis.py" in output.error
+        assert output.missing_artifacts == ("analysis.py",)
+        assert store.get("analysis.py") is None
+        assert store.get("independent.py") is not None
+        assert completion.payload["completion_evidence"]["unresolved_tool_call_ids"]
+        assert len(starts) == 1
+        assert len(provider.calls) == 3
 
 
 def test_a_failing_task_is_recorded_failed_and_still_reaches_summarize(tmp_path: Path) -> None:

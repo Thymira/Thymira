@@ -417,7 +417,6 @@ def test_running_graph_keeps_authorized_tool_pairs_intact_across_compaction(
     provider = ScriptedProvider(
         [
             CompactionSummary(summary="the old evidence remains paired"),
-            CompactionSummary(summary="the old evidence remains paired"),
             LLMToolCall(id="current-call", name="echo", arguments={"value": "x"}),
             DataProfileOutput(row_count=1, columns=("value",)),
         ]
@@ -463,16 +462,18 @@ def test_running_graph_keeps_authorized_tool_pairs_intact_across_compaction(
         provider=provider,
         tool_registry=registry,
         tool_context=tool_context,
-        context_budget=ContextBudget(window=300, model="test-model"),
+        context_budget=ContextBudget(window=320, model="test-model"),
         route_policy=TEST_ROUTE_POLICY,
     )
 
     result = ThyState.model_validate(graph.invoke(ThyState(run=run, plan=plan)))
     events = JsonlEventLog(path, run.id).events()
-    compacted = next(event for event in events if event.type is EventType.CONTEXT_COMPACTED)
-    shadowed = set(compacted.payload["shadowed_seqs"])
     old_seqs = {event.seq for event in old_pair}
-    assert old_seqs.isdisjoint(shadowed) or old_seqs <= shadowed
+    compactions = [event for event in events if event.type is EventType.CONTEXT_COMPACTED]
+    assert compactions
+    for compacted in compactions:
+        shadowed = set(compacted.payload["shadowed_seqs"])
+        assert old_seqs.isdisjoint(shadowed) or old_seqs <= shadowed
     assert result.agent_messages[0].status is TaskStatus.COMPLETED
     assert len(echo.seen_arguments) == 1
     requested = [event for event in events if event.type is EventType.HUMAN_APPROVAL_REQUESTED][-1]

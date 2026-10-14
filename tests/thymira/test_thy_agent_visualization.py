@@ -58,7 +58,10 @@ def test_visualization_agent_catalog_registers_the_spec_and_its_output_schema() 
 
     assert catalog.get("visualization-agent") is VISUALIZATION_AGENT_SPEC
     assert catalog.output_schema("visualization-agent") is PlotResult
-    assert catalog.system_prompt("visualization-agent")
+    prompt = " ".join(catalog.system_prompt("visualization-agent").split())
+    assert "Render charts as PNG files for inline previews" in prompt
+    assert "never reuse a path for another chart" in prompt
+    assert "use that path and produce matching content" in prompt
 
 
 def test_visualization_agent_only_exposes_its_allowlisted_tools(tmp_path: Path) -> None:

@@ -37,13 +37,13 @@ so callers in `thymira.core` never see that dict.
 
 from __future__ import annotations
 
-from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any
 
 from langgraph.graph import END, START, StateGraph
 
-from thymira.events import canonical_json, sha256_bytes, sha256_text
-from thymira.schemas import ArtifactKind, TaskStatus
+from thymira.events import canonical_json, sha256_text
+from thymira.schemas import TaskStatus
+from thymira.thy.artifact_delivery import resolve_requirement
 from thymira.thy.budget import DEFAULT_CONTEXT_WINDOW, ContextBudget
 from thymira.thy.models import ArtifactRequirement, ThyInput, ThyOutput, ThyProgress, ThyState
 from thymira.thy.nodes.execute import execute_node
@@ -51,11 +51,6 @@ from thymira.thy.nodes.inspect import inspect_node
 from thymira.thy.nodes.plan import plan_node
 from thymira.thy.nodes.rework import rework_node
 from thymira.thy.nodes.summarize import summarize_node
-from thymira.tools import (
-    artifact_read_limit,
-    resolve_artifact_media_type,
-    validate_artifact_bytes,
-)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -69,7 +64,7 @@ if TYPE_CHECKING:
     from thymira.agents.request_ledger import RequestLedger
     from thymira.events import EventLog
     from thymira.policies import Gate
-    from thymira.schemas import Artifact, ModelRoutePolicy
+    from thymira.schemas import ModelRoutePolicy
     from thymira.state import ArtifactStore
     from thymira.tools import ToolContext, ToolRegistry
 
@@ -96,82 +91,6 @@ def graph_definition_hash() -> str:
     return sha256_text(canonical_json(definition))
 
 
-def _artifact_for_requirement(
-    name: str,
-    kind: ArtifactKind,
-    media_type: str | None,
-    artifacts: Sequence[Artifact],
-    used_ids: set[str],
-) -> Artifact | None:
-    """Resolve one delivery by exact file identity first, then by semantic typed kind."""
-    try:
-        required_media_type = resolve_artifact_media_type(name, media_type)
-    except ValueError:
-        return None
-    exact = next(
-        (
-            artifact
-            for artifact in artifacts
-            if artifact.id not in used_ids
-            and artifact.valid
-            and artifact.name == name
-            and (kind is ArtifactKind.OTHER or artifact.kind is kind)
-            and _media_type_matches(required_media_type, artifact.media_type)
-        ),
-        None,
-    )
-    if exact is not None:
-        return exact
-    if (
-        kind is ArtifactKind.OTHER
-        or required_media_type is not None
-        or "/" in name
-        or "\\" in name
-        or PurePosixPath(name).suffix
-    ):
-        return None
-
-    candidates = [
-        artifact
-        for artifact in artifacts
-        if artifact.id not in used_ids
-        and artifact.kind is kind
-        and artifact.valid
-        and _media_type_matches(required_media_type, artifact.media_type)
-    ]
-    if not candidates:
-        return None
-    words = set(name.lower().replace("_", " ").split())
-    aliases = {
-        ArtifactKind.CODE: {"pipeline", "preprocess", "preprocessing", "encoder", "code"},
-        ArtifactKind.MODEL: {"model", "classifier", "estimator"},
-        ArtifactKind.METRICS: {"metric", "metrics", "evaluation", "summary"},
-        ArtifactKind.REPORT: {"report", "analysis", "summary"},
-    }.get(kind, set())
-    ranked = sorted(
-        candidates,
-        key=lambda artifact: (
-            -sum(1 for word in aliases if word in words and word in artifact.name.lower()),
-            artifact.name,
-        ),
-    )
-    score = sum(1 for word in aliases if word in words and word in ranked[0].name.lower())
-    if score == 0 and len(candidates) != 1:
-        return None
-    return ranked[0]
-
-
-def _media_type_matches(required: str | None, actual: str | None) -> bool:
-    """Match MIME types case-insensitively while ignoring optional parameters."""
-    if required is None:
-        return True
-    if actual is None:
-        return False
-    required_base = required.partition(";")[0].strip().casefold()
-    actual_base = actual.partition(";")[0].strip().casefold()
-    return required_base == actual_base
-
-
 def _first_failed_task_diagnosis(final_state: ThyState) -> str | None:
     """Return "<kind> failed: <diagnostics>" for the plan's first FAILED task, in plan order.
 
@@ -182,49 +101,17 @@ def _first_failed_task_diagnosis(final_state: ThyState) -> str | None:
     no task failed, so a run that only fell short on the deliverable check is not blamed on a
     task that actually completed.
     """
-    for agent_task, outcome in zip(final_state.completed, final_state.agent_messages, strict=False):
-        if outcome.status is TaskStatus.FAILED:
+    settled = tuple(zip(final_state.completed, final_state.agent_messages, strict=False))
+    repaired_positions = {
+        agent_task.recovery_of_position
+        for agent_task, outcome in settled
+        if agent_task.recovery_of_position is not None and outcome.status is TaskStatus.COMPLETED
+    }
+    for position, (agent_task, outcome) in enumerate(settled):
+        if outcome.status is TaskStatus.FAILED and position not in repaired_positions:
             reason = outcome.error or "no diagnostics recorded"
             return f"{agent_task.agent.value} failed: {reason}"
     return None
-
-
-def _artifact_content_matches_requirement(  # noqa: PLR0911  # every mismatch fails closed
-    artifact: Artifact,
-    *,
-    requirement_name: str,
-    requirement_media_type: str | None,
-    artifact_store: ArtifactStore | None,
-) -> bool:
-    """Revalidate typed bytes independently of the tool or plugin that published metadata."""
-    try:
-        required_media_type = resolve_artifact_media_type(requirement_name, requirement_media_type)
-        actual_media_type = resolve_artifact_media_type(artifact.name, artifact.media_type)
-    except ValueError:
-        return False
-    if artifact_store is None:
-        return required_media_type is None
-    if required_media_type is not None and actual_media_type != required_media_type:
-        return False
-    try:
-        current = artifact_store.get(artifact.name)
-        if (
-            current is None
-            or not current.valid
-            or current.id != artifact.id
-            or current.sha256 != artifact.sha256
-        ):
-            return False
-        validation_media_type = required_media_type or actual_media_type
-        data = artifact_store.load_bytes_bounded(
-            artifact.name, artifact_read_limit(validation_media_type)
-        )
-        if sha256_bytes(data) != artifact.sha256:
-            return False
-        validate_artifact_bytes(artifact.name, data, validation_media_type)
-    except (KeyError, OSError, ValueError):
-        return False
-    return True
 
 
 def _route_after_inspect(state: ThyState) -> str:
@@ -233,8 +120,8 @@ def _route_after_inspect(state: ThyState) -> str:
 
 
 def _route_after_plan(state: ThyState) -> str:
-    """Execute only when the plan's decision allows execution; a halted plan goes to END."""
-    return "execute" if state.error is None else END
+    """Execute an allowed plan; a pending review and a refused plan both end this pass."""
+    return "execute" if state.error is None and state.pending_plan_review is None else END
 
 
 def _route_after_execute(state: ThyState) -> str:
@@ -315,6 +202,7 @@ def build_thy_graph(
     max_concurrency: int | None = None,
     before_model_request: Callable[[], Sequence[str]] | None = None,
     before_execute: Callable[[], None] | None = None,
+    prepare_inputs: Callable[[tuple[str, ...]], None] | None = None,
     before_model_selection: Callable[[], None] | None = None,
     before_model_call: Callable[[ModelChoice], None] | None = None,
     record_model_usage: Callable[[LLMResponse], None] | None = None,
@@ -353,6 +241,7 @@ def build_thy_graph(
             ``< 2``), Execute dispatches sequentially, exactly as before; concurrency is engaged
             only when no `tool_context` is given.
         before_model_request: Optional owner-bound hook invoked before each THY provider request.
+        prepare_inputs: Core-owned publication of selected frozen input IDs after Plan approval.
         before_execute: Optional owner-bound hook invoked at the Plan -> Execute boundary.
         before_model_selection: Optional Core budget check before routing each model call.
         before_model_call: Optional Core Gate check after routing and before provider invocation.
@@ -405,6 +294,7 @@ def build_thy_graph(
             max_concurrency=max_concurrency,
             before_model_request=before_model_request,
             before_execute=before_execute,
+            prepare_inputs=prepare_inputs,
             before_model_selection=before_model_selection,
             before_model_call=before_model_call,
             record_model_usage=record_model_usage,
@@ -459,6 +349,7 @@ def run_thy(
     max_concurrency: int | None = None,
     before_model_request: Callable[[], Sequence[str]] | None = None,
     before_execute: Callable[[], None] | None = None,
+    prepare_inputs: Callable[[tuple[str, ...]], None] | None = None,
     before_model_selection: Callable[[], None] | None = None,
     before_model_call: Callable[[ModelChoice], None] | None = None,
     record_model_usage: Callable[[LLMResponse], None] | None = None,
@@ -498,6 +389,7 @@ def run_thy(
         max_concurrency=max_concurrency,
         before_model_request=before_model_request,
         before_execute=before_execute,
+        prepare_inputs=prepare_inputs,
         before_model_selection=before_model_selection,
         before_model_call=before_model_call,
         record_model_usage=record_model_usage,
@@ -508,7 +400,11 @@ def run_thy(
     start_state = (
         initial_state
         if initial_state is not None
-        else ThyState(run=thy_input.run, execution_constraints=thy_input.execution_constraints)
+        else ThyState(
+            run=thy_input.run,
+            execution_constraints=thy_input.execution_constraints,
+            execution_decision=thy_input.execution_decision,
+        )
     )
     if start_state.run.id != thy_input.run.id:
         msg = "initial_state.run must be the same Run as thy_input.run"
@@ -543,19 +439,8 @@ def run_thy(
     for name, requirement in requirement_map.items():
         if name in conflicting_requirements:
             continue
-        resolved = _artifact_for_requirement(
-            name,
-            requirement.kind,
-            requirement.media_type,
-            available,
-            used_ids,
-        )
-        if resolved is None or not _artifact_content_matches_requirement(
-            resolved,
-            requirement_name=name,
-            requirement_media_type=requirement.media_type,
-            artifact_store=artifact_store,
-        ):
+        resolved = resolve_requirement(requirement, available, used_ids, artifact_store)
+        if resolved is None:
             missing.append(name)
         else:
             used_ids.add(resolved.id)
@@ -566,6 +451,8 @@ def run_thy(
         missing_error = "required artifacts missing: " + ", ".join(missing)
         diagnosis = _first_failed_task_diagnosis(final_state)
         error = f"{diagnosis}; {missing_error}" if diagnosis is not None else missing_error
+    elif error is None and not final_state.awaiting_approval():
+        error = _first_failed_task_diagnosis(final_state)
     progress = (
         ThyProgress(
             plan=final_state.plan,
@@ -586,6 +473,7 @@ def run_thy(
         required_artifacts=requirements,
         missing_artifacts=tuple(missing),
         error=error,
+        pending_plan_review=final_state.pending_plan_review,
         usage={
             "requests": final_state.usage.requests,
             "tokens": final_state.usage.total_tokens,

@@ -10,7 +10,7 @@ from tests.thymira.fixtures_tools import development_policy
 from thymira.agents import AgentContext, Delegator, LLMToolCall, ScriptedProvider
 from thymira.events import InMemoryEventLog
 from thymira.policies import Gate, PolicyEngine, RiskProfile, auto_approve
-from thymira.schemas import ModelRoutePolicy, SandboxMode, TaskStatus, new_id
+from thymira.schemas import EventType, ModelRoutePolicy, SandboxMode, TaskStatus, new_id
 from thymira.state import LocalArtifactStore
 from thymira.thy import CODING_AGENT_SPEC, coding_agent_catalog
 from thymira.tools import Tool, ToolContext, ToolRegistry
@@ -24,7 +24,10 @@ from thymira.tools.builtins import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
     from pathlib import Path
+
+    from thymira.agents.llm.base import LLMMessage
 
 TEST_ROUTE_POLICY = ModelRoutePolicy.from_routes(("test-model",), authority="code-owned-tests")
 
@@ -78,31 +81,22 @@ def test_coding_agent_diagnoses_a_failure_and_completes_on_the_second_attempt(
                 arguments={
                     "path": "script.py",
                     "content": _BROKEN_SCRIPT,
+                    "kind": "code",
                     "description": "Write the broken divide-by-zero script",
                 },
             ),
-            LLMToolCall(
-                id="call-2",
-                name="run_python",
-                arguments={
-                    "code": _BROKEN_SCRIPT,
-                    "description": "Run the broken divide-by-zero script",
-                },
-            ),
+            _registered_run_call(context, "call-2", "Run the broken registered script"),
             LLMToolCall(
                 id="call-3",
                 name="write_file",
                 arguments={
                     "path": "script.py",
                     "content": _FIXED_SCRIPT,
+                    "kind": "code",
                     "description": "Write the fixed recovery script",
                 },
             ),
-            LLMToolCall(
-                id="call-4",
-                name="run_python",
-                arguments={"code": _FIXED_SCRIPT, "description": "Run the fixed recovery script"},
-            ),
+            _registered_run_call(context, "call-4", "Run the fixed registered script"),
             LLMToolCall(
                 id="call-5",
                 name="final_result",
@@ -126,6 +120,26 @@ def test_coding_agent_diagnoses_a_failure_and_completes_on_the_second_attempt(
     assert task.error is None
     assert task.summary is not None
     assert '"exit_code":0' in task.summary.replace(" ", "")
+    completed = [event for event in log.events() if event.type is EventType.AGENT_COMPLETED][-1]
+    assert completed.payload["completion_evidence"]["repaired_tool_call_ids"]
+
+
+def _registered_run_call(
+    context: ToolContext, call_id: str, description: str
+) -> Callable[[Sequence[LLMMessage]], LLMToolCall]:
+    """Build a RunPython request from the current task-owned CODE artifact revision."""
+
+    def request(_messages: Sequence[LLMMessage]) -> LLMToolCall:
+        artifact = context.artifact_store.get("script.py")
+        if artifact is None:
+            raise AssertionError("the script source must be registered before execution")
+        return LLMToolCall(
+            id=call_id,
+            name="run_python",
+            arguments={"source_artifact_id": artifact.id, "description": description},
+        )
+
+    return request
 
 
 def test_coding_agent_ends_failed_with_a_diagnosis_after_persistent_failure(

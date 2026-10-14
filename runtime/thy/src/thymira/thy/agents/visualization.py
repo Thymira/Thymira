@@ -1,16 +1,8 @@
 """The Visualization agent: produce a plot artifact with a caption (THY-21).
 
-Same drop-in shape as THY-14/18/20: a hand-written `AgentSpec` on the THY-01/03/04 framework
-(`thymira.agents`), FINAL-tier. Since THY-32 added `ThyAgentKind.VISUALIZATION` (its value equal to
-this spec's `name`), `execute_node` can dispatch to it through a catalog that holds this spec, such
-as `full_agent_catalog()`. `tool_allowlist` names `run_python` (to render a plot, e.g. with
-matplotlib, to an SVG
-string) and `write_file` (to persist it) -- the pair the roadmap deliverable specifies. Neither
-tool registered a real `Artifact` on its own, so `write_file` grew an optional `kind` argument
-(this task) that, when given, also calls `ArtifactStore.save_batch` -- the same
-`ToolManager`-diff path (TOOL-04) every other artifact-producing tool already uses. Without that,
-this task's own "Done when" (a PLOT artifact with a sha256 in the manifest) was not reachable
-with the tools the spec names.
+The hand-written `AgentSpec` uses `run_python.output_artifacts` for PNG plots and `write_file` for
+requested SVG exports. Both paths register a real `Artifact` with `kind="plot"`, so each delivered
+plot has a sha256 in the manifest and an id the agent can report.
 """
 
 from __future__ import annotations

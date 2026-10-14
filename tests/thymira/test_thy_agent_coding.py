@@ -73,6 +73,8 @@ def test_coding_agent_catalog_registers_the_spec_and_its_output_schema() -> None
     normalized_prompt = " ".join(prompt.split())
     assert "every quantitative value the report will cite" in normalized_prompt
     assert 'register each JSON file as `kind="metrics"`' in normalized_prompt
+    assert "never save different charts repeatedly to the same path" in normalized_prompt.casefold()
+    assert "compose the charts into that one figure" in normalized_prompt
 
 
 def test_coding_agent_only_exposes_its_allowlisted_tools(tmp_path: Path) -> None:

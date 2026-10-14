@@ -89,7 +89,6 @@ from thymira.agents.settlement import (
     delegation_key,
     finalize_parked_invocation,
     record_settlement,
-    settle_stopped,
 )
 from thymira.agents.usage import ConcurrentRunUsage, RunUsage
 from thymira.events import InMemoryEventLog
@@ -109,9 +108,25 @@ from thymira.schemas import (
 )
 from thymira.thy.agents.experiment import ExperimentResult
 from thymira.thy.agents.ml import ML_TUNING_HELPER_SPEC, MLResult
+from thymira.thy.artifact_recovery import (
+    artifact_ids as _artifact_ids,
+)
+from thymira.thy.artifact_recovery import (
+    delegation_instruction as _delegation_instruction,
+)
+from thymira.thy.artifact_recovery import (
+    new_artifacts as _new_artifacts,
+)
+from thymira.thy.artifact_recovery import (
+    record_recovery_attempt_if_needed,
+    recover_plots_if_settled,
+    recovery_skip_reason,
+)
 from thymira.thy.compaction import CompactionContext
 from thymira.thy.experiments import experiment_from_ml_result, experiment_from_result
 from thymira.thy.models import ThyAgentKind
+from thymira.thy.task_completion import task_completion_validator as _task_completion_validator
+from thymira.thy.task_settlement import stopped_settlement as _stopped_settlement
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -125,7 +140,7 @@ if TYPE_CHECKING:
     from thymira.schemas import Artifact, Event, ModelRoutePolicy
     from thymira.state import ArtifactStore
     from thymira.thy.budget import ContextBudget
-    from thymira.thy.models import AgentTask, ArtifactRequirement, ThyState
+    from thymira.thy.models import AgentTask, ThyState
     from thymira.tools import ToolContext, ToolRegistry
 
 _MIN_PARALLEL = 2
@@ -145,6 +160,7 @@ def execute_node(
     max_concurrency: int | None = None,
     before_model_request: Callable[[], Sequence[str]] | None = None,
     before_execute: Callable[[], None] | None = None,
+    prepare_inputs: Callable[[tuple[str, ...]], None] | None = None,
     before_model_selection: Callable[[], None] | None = None,
     before_model_call: Callable[[ModelChoice], None] | None = None,
     record_model_usage: Callable[[LLMResponse], None] | None = None,
@@ -176,6 +192,7 @@ def execute_node(
             `request_ledger` so their selection evidence is written to the canonical log before
             the gateway call.
         before_model_request: Optional owner-bound hook invoked before each provider request.
+        prepare_inputs: Core-owned publication of selected frozen input IDs after Plan approval.
         before_execute: Optional owner-bound hook invoked when this Execute node is entered.
         before_model_selection: Optional Core budget check before routing each model call.
         before_model_call: Optional Core Gate check after routing and before provider invocation.
@@ -200,6 +217,16 @@ def execute_node(
     def _execute(state: ThyState) -> dict[str, Any]:
         if before_execute is not None:
             before_execute()
+        if prepare_inputs is not None:
+            selected = tuple(
+                dict.fromkeys(identity for task in state.plan for identity in task.model_input_ids)
+            )
+            try:
+                prepare_inputs(selected)
+            except (OSError, ValueError) as exc:
+                return state.model_copy(
+                    update={"error": f"model input rejected: {exc}"}
+                ).model_dump()
         compaction_context = (
             CompactionContext(
                 provider=provider,
@@ -311,6 +338,7 @@ def _run_sequential(
         agent_task.id: outcome.status for agent_task, outcome in carried
     }
     pending = _pending_outcome(state)
+    plan = list(state.plan)
 
     for index, agent_task in enumerate(state.plan[len(carried) :]):
         before_ids = _artifact_ids(store)
@@ -374,13 +402,28 @@ def _run_sequential(
                 ),
                 None,
             )
-        elif (unresolved := _unresolved_outcome(state, agent_task, catalog, event_log)) is not None:
-            outcome = unresolved
-            settlement = None
+        elif pre_dispatch := _pre_dispatch_outcome(
+            state,
+            agent_task,
+            catalog,
+            plan=state.plan,
+            position=len(carried) + index,
+            event_log=event_log,
+            actor=ctx.actor,
+            store=store,
+            may_resume=(
+                pending is not None
+                and index == 0
+                and readiness is not None
+                and readiness.status in {ResumeStatus.READY, ResumeStatus.WAITING}
+            ),
+        ):
+            outcome, settlement = pre_dispatch
         else:
             spec = catalog.get(agent_task.agent.value)
             ready = readiness is not None and readiness.status is ResumeStatus.READY
             resume = readiness.resume if ready else None
+            record_recovery_attempt_if_needed(event_log, agent_task, fresh=resume is None)
             delegated = delegator.delegate(
                 "thy",
                 spec,
@@ -389,6 +432,7 @@ def _run_sequential(
                 resume=resume,
                 task=pending if resume is not None else None,
                 skill_names=agent_task.skill_names,
+                task_completion_validator=_task_completion_validator(agent_task, store),
             )
             outcome = delegated.task
             settlement = None if isinstance(delegated, PendingDelegation) else delegated
@@ -401,20 +445,31 @@ def _run_sequential(
         experiment = _folded_experiment(ctx, state, agent_task, settlement, produced, event_log)
         if experiment is not None:
             experiments.append(experiment)
-        if outcome.status is TaskStatus.PENDING:
-            # The Run parks here: a human must answer before this task can finish, and nothing
-            # after it is attempted until then (`_route_after_execute` ends the graph).
-            break
-        if (
+        if outcome.status is TaskStatus.PENDING or (
             pending is not None
             and readiness is not None
             and readiness.status not in {ResumeStatus.READY, ResumeStatus.WAITING}
         ):
-            # An unrecoverable carried task is terminal evidence for this Execute pass. Do not
-            # continue with later plan work after failing closed on the original call.
+            # A PENDING call parks for a human; an unrecoverable carried call stops after its
+            # failure. In either case later plan work waits for another authorized pass.
             break
 
+    recover_plots_if_settled(
+        plan,
+        completed,
+        agent_messages,
+        artifacts,
+        store=store,
+        event_log=event_log,
+        delegator=delegator,
+        catalog=catalog,
+        state=state,
+        actor=ctx.actor,
+        unresolved=lambda agent_task: _unresolved_outcome(state, agent_task, catalog, event_log),
+    )
+
     updates: dict[str, Any] = {
+        "plan": tuple(plan),
         "completed": tuple(completed),
         "agent_messages": tuple(agent_messages),
         "artifacts": tuple(artifacts),
@@ -665,6 +720,7 @@ def _delegate_wave(
                 _delegation_instruction(agent_task),
                 depth=0,
                 skill_names=agent_task.skill_names,
+                task_completion_validator=_task_completion_validator(agent_task, None),
             )
             .task
         )
@@ -838,76 +894,33 @@ def _blocked(agent_task: AgentTask, status_by_id: dict[str, TaskStatus]) -> bool
     return any(status_by_id.get(dep) is not TaskStatus.COMPLETED for dep in agent_task.depends_on)
 
 
-_SKIP_REASON = "a dependency did not complete"
-
-
-def _required_artifact_line(requirement: ArtifactRequirement) -> str:
-    """Render one required-artifact bullet, naming its media type only when the plan declared one.
-
-    The exact name is what a task most often gets wrong live (a plan promises `duration.png`, an
-    agent writes `duration_months.png`), so it always leads; `kind` always follows since Plan
-    defaults it rather than leaving it unset. `media_type` is genuinely optional on
-    `ArtifactRequirement` and only worth stating when the plan actually constrained it.
-    """
-    media_type = (
-        "" if requirement.media_type is None else f', media_type="{requirement.media_type}"'
-    )
-    return f'- {requirement.name} (kind="{requirement.kind.value}"{media_type})'
-
-
-def _delegation_instruction(agent_task: AgentTask) -> str:
-    """The task's instruction, plus a note on any artifact the plan requires it to publish.
-
-    `AgentTask.required_artifacts` is Plan's own declared requirement (a name and an
-    `ArtifactKind`), checked against the `ArtifactStore` only *after* Execute finishes
-    (`thymira.thy.graph`'s "required artifacts missing" check) -- but until now nothing before
-    that point ever told the delegated agent the check exists, or that `write_file`'s optional
-    `kind` argument (or one `run_python.output_artifacts` entry's own `kind`) is what satisfies
-    it. A `write_file` call with no `kind` never registers an `Artifact`, so a task can do the
-    exact right work and still fail the Run's own deliverable check with no visible defect in the
-    output (found live: a coding agent wrote the full declared report, `write_file` returned
-    success, but the call carried no `kind`, so "required artifacts missing" failed the Run over
-    a file that was sitting right there in the workspace). This is additive only: a task with no
-    declared requirement gets its instruction back unchanged.
-    """
-    if not agent_task.required_artifacts:
-        return agent_task.instruction
-    lines = "\n".join(
-        _required_artifact_line(requirement) for requirement in agent_task.required_artifacts
-    )
-    return (
-        f"{agent_task.instruction}\n\n"
-        "This task's plan declares the following required deliverable(s); the Run is not "
-        "considered complete until each one is registered as a real Artifact, not merely "
-        "written to the workspace -- pass the matching kind shown below to write_file's `kind` "
-        "argument, or to the corresponding entry's `kind` in run_python's `output_artifacts`:\n"
-        f"{lines}"
-    )
-
-
-def _stopped_settlement(
-    state: ThyState, agent_task: AgentTask, event_log: EventLog, actor: Actor
-) -> Settlement:
-    """Settle a task the orchestrator stopped, through the same writer a real delegation uses.
-
-    A skipped task used to exist only in graph state; it now also settles on the chain as
-    `stopped`, at the depth (1) the delegation it replaces would have run at, so an auditor sees
-    every planned task account for itself rather than only the ones that were dispatched.
-    """
-    return settle_stopped(
-        task=Task(
-            id=new_id("task"),
-            run_id=state.run.id,
-            agent_id=new_id("agent"),
-            objective=agent_task.instruction,
-        ),
-        parent_agent="thy",
-        agent=agent_task.agent.value,
-        delegation_depth=1,
-        reason=_SKIP_REASON,
+def _pre_dispatch_outcome(
+    state: ThyState,
+    agent_task: AgentTask,
+    catalog: AgentCatalog,
+    *,
+    plan: Sequence[AgentTask],
+    position: int,
+    event_log: EventLog,
+    actor: Actor,
+    store: ArtifactStore | None,
+    may_resume: bool,
+) -> tuple[Task, Settlement | None] | None:
+    """Resolve an unknown agent or a duplicate/satisfied correction before delegation."""
+    if (unresolved := _unresolved_outcome(state, agent_task, catalog, event_log)) is not None:
+        return unresolved, None
+    reason = recovery_skip_reason(
+        agent_task,
+        plan=plan,
+        position=position,
         event_log=event_log,
-        actor=actor,
+        store=store,
+        may_resume=may_resume,
     )
+    if reason is None:
+        return None
+    settlement = _stopped_settlement(state, agent_task, event_log, actor, reason=reason)
+    return settlement.task, settlement
 
 
 def _unresolved_outcome(
@@ -985,20 +998,6 @@ def _unknown_agent_error(kind: str, catalog: AgentCatalog) -> str:
         f"unknown agent {kind!r}: this run's catalog registers "
         f"{', '.join(catalog.names()) or 'no agents'}"
     )
-
-
-def _artifact_ids(store: ArtifactStore | None) -> frozenset[str]:
-    """Ids of the store's active artifacts right now, or an empty set when there is no store."""
-    if store is None:
-        return frozenset()
-    return frozenset(artifact.id for artifact in store.list_active())
-
-
-def _new_artifacts(store: ArtifactStore | None, before_ids: frozenset[str]) -> list[Artifact]:
-    """Active artifacts that appeared since `before_ids` was taken (empty without a store)."""
-    if store is None:
-        return []
-    return [artifact for artifact in store.list_active() if artifact.id not in before_ids]
 
 
 def _folded_experiment(

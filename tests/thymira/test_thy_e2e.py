@@ -43,6 +43,7 @@ from thymira.policies import (
 )
 from thymira.schemas import (
     ArtifactKind,
+    ConversationInput,
     Decision,
     EventType,
     ModelRoutePolicy,
@@ -62,7 +63,9 @@ from thymira.thy import (
     ThyPhase,
     run_thy,
 )
+from thymira.thy.agents.data import DataProfile, data_agent_catalog
 from thymira.tools import LegacyToolValue, Tool, ToolContext, ToolRegistry, ToolResult
+from thymira.tools.builtins import Glob, ProfileDataset, QuerySql, ReadFile
 
 if TYPE_CHECKING:
     from thymira.tools import ToolInvocation
@@ -126,7 +129,10 @@ def _run() -> Run:
         id=new_id("run"),
         project_id=new_id("project"),
         session_id=new_id("session"),
-        prompt="Assess credit-risk applicants and recommend a model.",
+        prompt=(
+            "Train and evaluate a credit-risk classifier on "
+            "german_credit and recommend the best model."
+        ),
     )
 
 
@@ -364,9 +370,9 @@ def test_failed_run_reaches_summarize_after_a_run_python_failure_is_diagnosed(
         route_policy=TEST_ROUTE_POLICY,
     )
 
-    # A failed task is evidence, not a crash (bug-hunt C1): Execute still reaches Summarize, which
-    # degrades cleanly since there is no experiment to compare.
-    assert output.error is None
+    # Execute still reaches Summarize, but unresolved tool failure must prevent successful
+    # completion even when the plan named no mandatory artifacts.
+    assert output.error == "experiment failed: run_python failed: simulated division by zero"
     assert output.summary == "no experiments to compare; nothing to recommend"
     assert output.recommendation is None
     assert output.experiment_ids == ()
@@ -385,3 +391,229 @@ def test_failed_run_reaches_summarize_after_a_run_python_failure_is_diagnosed(
     # A clean stop, not a silent drop: the event log still verifies and no report was written.
     assert log.verify().valid
     assert store.get("analysis.md") is None
+
+
+@pytest.mark.parametrize(
+    ("current_message", "include_plots", "required_paths"),
+    [
+        pytest.param(
+            "Puedes hacer algo más con el dataset?",
+            False,
+            ("profile/german_credit.json",),
+            id="generic-follow-up-does-not-repeat-old-plots",
+        ),
+        pytest.param(
+            "Repeat the german_credit EDA with distributions and numeric correlations.",
+            True,
+            (
+                "profile/german_credit.json",
+                "profile/german_credit-distributions.png",
+                "profile/german_credit-correlation.png",
+            ),
+            id="explicitly-repeat-eda-and-plots",
+        ),
+    ],
+)
+def test_follow_up_profile_uses_prior_outputs_as_references_and_publishes_fresh_outputs(
+    tmp_path: Path,
+    current_message: str,
+    include_plots: bool,
+    required_paths: tuple[str, ...],
+) -> None:
+    """A two-run graph keeps historical artifacts contextual while rerunning the real tool."""
+    project = _workspace(tmp_path)
+    policy = development_policy().merged_with(_PLAN_PASSES)
+    paths = (
+        ("profile/german_credit.json", ArtifactKind.REPORT),
+        ("profile/german_credit-distributions.png", ArtifactKind.PLOT),
+        ("profile/german_credit-correlation.png", ArtifactKind.PLOT),
+    )
+    data = DataProfile(
+        columns=("duration", "amount", "class"),
+        dtypes={"duration": "Int64", "amount": "Int64", "class": "String"},
+        missing={"duration": 0, "amount": 0, "class": 0},
+        target_candidates=("class",),
+    )
+
+    def _run_profile(
+        run: Run, tmp: Path, provider: ScriptedProvider
+    ) -> tuple[
+        ThyOutput,
+        LocalArtifactStore,
+        InMemoryEventLog,
+    ]:
+        log = InMemoryEventLog(run.id)
+        store = LocalArtifactStore(tmp / "artifacts" / run.id, run.id)
+        gate = Gate(PolicyEngine(policy), log, approver=auto_approve)
+        context = ToolContext(
+            run_id=run.id,
+            agent_id=new_id("agent"),
+            workspace=tmp / "tool-workspace" / run.id,
+            event_log=log,
+            gate=gate,
+            artifact_store=store,
+            risk_profile=RiskProfile(
+                risk_level="limited", activity_category="analysis", confidence=1.0
+            ),
+        )
+        output = run_thy(
+            ThyInput(run=run),
+            data_agent_catalog(),
+            log,
+            provider=provider,
+            project_dir=project,
+            gate=gate,
+            artifact_store=store,
+            tool_registry=ToolRegistry(
+                (
+                    cast("Tool", Glob()),
+                    cast("Tool", ReadFile()),
+                    cast("Tool", ProfileDataset()),
+                    cast("Tool", QuerySql()),
+                )
+            ),
+            tool_context=context,
+            route_policy=TEST_ROUTE_POLICY,
+        )
+        return output, store, log
+
+    first_run = _run().model_copy(
+        update={
+            "prompt": ("Perform a basic EDA of german_credit with distributions and correlations.")
+        }
+    )
+    first_instruction = (
+        "Call profile_dataset for german_credit with include_plots=true and publish the profile "
+        "and charts."
+    )
+    first_provider = ScriptedProvider(
+        [
+            PlanOutput(
+                tasks=(
+                    AgentTask(
+                        id="profile",
+                        agent=ThyAgentKind.DATA,
+                        phase=ThyPhase.EXECUTE,
+                        instruction=first_instruction,
+                    ),
+                )
+            ),
+            LLMToolCall(
+                id="first-profile",
+                name="profile_dataset",
+                arguments={
+                    "dataset": "german_credit",
+                    "description": "Profile the registered German credit dataset",
+                    "include_plots": True,
+                },
+            ),
+            data,
+        ]
+    )
+    first_output, first_store, first_log = _run_profile(
+        first_run,
+        tmp_path / "first",
+        first_provider,
+    )
+
+    assert first_output.error is None
+    assert first_output.missing_artifacts == ()
+    assert {name for name, _kind in paths} <= {item.name for item in first_store.list_active()}
+    assert first_store.verify() == []
+    assert first_log.verify().valid
+
+    second_run = Run(
+        id=new_id("run"),
+        project_id=first_run.project_id,
+        session_id=first_run.session_id,
+        prompt=(
+            f"Earlier run {first_run.id} published profile/german_credit.json and its charts.\n"
+            f"Current request: {current_message}"
+        ),
+        conversation=ConversationInput(
+            ordinal=2,
+            client_message_id="repeat-profile-with-context",
+            message=current_message,
+            context_run_ids=(first_run.id,),
+        ),
+    )
+    contaminated = {
+        "tasks": [
+            {
+                "id": "profile",
+                "agent": ThyAgentKind.DATA.value,
+                "phase": ThyPhase.EXECUTE.value,
+                "instruction": first_instruction,
+                "required_artifacts": [{"name": name, "kind": kind.value} for name, kind in paths],
+                "artifact_references": [],
+            }
+        ]
+    }
+    output_names = ", ".join(required_paths)
+    second_instruction = (
+        f"Call profile_dataset for german_credit with include_plots={str(include_plots).lower()}. "
+        f"Publish {output_names} as fresh outputs."
+    )
+    second_plan = {
+        "tasks": [
+            {
+                "id": "profile",
+                "agent": ThyAgentKind.DATA.value,
+                "phase": ThyPhase.EXECUTE.value,
+                "instruction": second_instruction,
+                "outputs_to_publish": [
+                    {
+                        "name": name,
+                        "kind": kind.value,
+                    }
+                    for name, kind in paths
+                    if name in required_paths
+                ],
+                "artifact_references": [
+                    {"name": name, "source_run_id": first_run.id} for name, _kind in paths
+                ],
+            }
+        ]
+    }
+    second_provider = ScriptedProvider(
+        [
+            contaminated,
+            second_plan,
+            LLMToolCall(
+                id="second-profile",
+                name="profile_dataset",
+                arguments={
+                    "dataset": "german_credit",
+                    "description": "Repeat the registered dataset profile",
+                    "include_plots": include_plots,
+                },
+            ),
+            data,
+        ]
+    )
+    second_output, second_store, second_log = _run_profile(
+        second_run, tmp_path / "second", second_provider
+    )
+
+    assert second_output.error is None
+    assert second_output.missing_artifacts == ()
+    assert set(second_output.required_artifacts) == set(required_paths)
+    assert set(second_output.artifact_ids).isdisjoint(
+        {artifact.id for artifact in first_store.list_active()}
+    )
+    active_names = {item.name for item in second_store.list_active()}
+    assert set(required_paths) <= active_names
+    assert not ({name for name, _kind in paths} - set(required_paths)) & active_names
+    assert second_store.verify() == []
+    assert second_log.verify().valid
+    execution_prompt = next(
+        call["prompt"]
+        for call in second_provider.calls
+        if "Prior-run artifacts supplied as references only" in call["prompt"]
+    )
+    assert first_run.id in execution_prompt
+    assert all(name in execution_prompt for name, _kind in paths)
+    assert any(
+        event.type is EventType.AGENT_COMPLETED and event.payload.get("end_reason") == "completed"
+        for event in second_log.events()
+    )

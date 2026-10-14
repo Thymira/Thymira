@@ -18,7 +18,15 @@ from thymira.agents.model_binding import routed_model
 from thymira.agents.prompt_framing import frame_untrusted
 from thymira.observability import agent as agent_observation
 from thymira.schemas import Actor, ArtifactKind, EventType
+from thymira.state import ArtifactWrite
 from thymira.thy.models import Recommendation, SynthesisNarrative
+from thymira.thy.result_report import (
+    conversation_task_summary,
+    evaluation_report,
+    experiment_facts,
+    exploratory_report,
+    training_report,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -33,7 +41,10 @@ if TYPE_CHECKING:
 _SUMMARIZE_INSTRUCTIONS = (
     "You are THY, writing the recommendation for a completed data-science run. You are given "
     "the best model and its metrics, already chosen by deterministic comparison -- never "
-    "propose a different one. Write only the tradeoffs of that choice and its limitations."
+    "propose a different one. Write only the tradeoffs of that choice and its limitations. "
+    "Use only recorded metrics and methodology. Accuracy is the fraction classified correctly; "
+    "it does not imply balanced precision/recall, fairness, calibration or external validity. "
+    "Do not infer unmeasured metrics, overfitting, class balance or data preparation."
 )
 
 
@@ -65,16 +76,34 @@ def summarize_node(
     """Build the Summarize node bound to `artifact_store`.
 
     Terminal phase: does not call `state.advance()` (SUMMARIZE is already the last `ThyPhase`).
-    A run with no experiments or none reporting the comparison metric degrades to a summary
-    saying so, without writing a report artifact nobody could substantiate. Unscored attempts
+    A run with verified evaluation metrics publishes their report without inventing an
+    Experiment. Otherwise, no scored results yield a plain summary. Unscored attempts
     remain available for MIRA to audit, including a refused sandbox execution.
     """
 
     def _summarize(state: ThyState) -> dict[str, Any]:
         if not state.experiments:
-            return state.model_copy(
-                update={"summary": "no experiments to compare; nothing to recommend"}
-            ).model_dump()
+            evaluated = evaluation_report(state, artifact_store)
+            exploratory = exploratory_report(state, artifact_store, event_log.events())
+            if exploratory is not None:
+                rendered = exploratory.markdown
+                if evaluated is not None:
+                    rendered += "\n\n" + evaluated
+                return _publish_report(
+                    state,
+                    rendered,
+                    artifact_store,
+                    event_log,
+                    report_input_artifact_ids=exploratory.source_artifact_ids,
+                )
+            if evaluated is not None:
+                return _publish_report(state, evaluated, artifact_store, event_log)
+            summary = "no experiments to compare; nothing to recommend"
+            if state.run.conversation is not None:
+                # Structured task JSON stays in the task evidence unless a source-linked report
+                # can turn its facts into a checked human narrative.
+                summary = conversation_task_summary(state) or summary
+            return state.model_copy(update={"summary": summary}).model_dump()
         if not any(metric in experiment.metrics for experiment in state.experiments):
             return state.model_copy(
                 update={
@@ -102,7 +131,8 @@ def summarize_node(
         with agent_observation(name="thy-summarize", objective=state.run.prompt) as observation:
             result = agent.run_sync(
                 frame_untrusted(
-                    f"Best model: {best.name!r}. Metrics: {best.metrics}.",
+                    f"Best model: {best.name!r}. Metrics: {best.metrics}.\n"
+                    + experiment_facts(best, artifact_store, event_log.events()),
                     label="thy-experiment-results",
                 )
             )
@@ -114,13 +144,35 @@ def summarize_node(
             limitations=result.output.limitations,
         )
 
-        rendered = (
-            f"# Analysis\n\n"
-            f"**Best model**: {recommendation.best_model}\n\n"
-            f"**Metrics**: {recommendation.metrics}\n\n"
-            f"## Tradeoffs\n\n{recommendation.tradeoffs}\n\n"
-            f"## Limitations\n\n{recommendation.limitations}\n"
+        rendered = training_report(best, recommendation, artifact_store, event_log.events())
+        return _publish_report(state, rendered, artifact_store, event_log, recommendation)
+
+    return _summarize
+
+
+def _publish_report(
+    state: ThyState,
+    rendered: str,
+    artifact_store: ArtifactStore,
+    event_log: EventLog,
+    recommendation: Recommendation | None = None,
+    report_input_artifact_ids: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Publish the actual narrative so independent report controls can inspect its claims."""
+    if report_input_artifact_ids:
+        (artifact,) = artifact_store.save_artifact_batch(
+            (
+                ArtifactWrite(
+                    name="analysis.md",
+                    data=rendered.encode("utf-8"),
+                    kind=ArtifactKind.REPORT,
+                    media_type="text/markdown",
+                    input_artifact_ids=report_input_artifact_ids,
+                ),
+            ),
+            produced_by=state.run.id,
         )
+    else:
         artifact = artifact_store.save_text(
             "analysis.md",
             rendered,
@@ -128,27 +180,25 @@ def summarize_node(
             kind=ArtifactKind.REPORT,
             media_type="text/markdown",
         )
-        event_log.append(
-            EventType.ARTIFACT_CREATED,
-            Actor.system(),
-            {
-                "name": artifact.name,
-                "sha256": artifact.sha256,
-                "artifact_id": artifact.id,
-                "produced_by": artifact.produced_by,
-            },
-            subject_id=artifact.id,
-            producer="thymira.thy",
-        )
-        return state.model_copy(
-            update={
-                "summary": rendered,
-                "recommendation": recommendation,
-                "artifacts": (*state.artifacts, artifact),
-            }
-        ).model_dump()
-
-    return _summarize
+    event_log.append(
+        EventType.ARTIFACT_CREATED,
+        Actor.system(),
+        {
+            "name": artifact.name,
+            "sha256": artifact.sha256,
+            "artifact_id": artifact.id,
+            "produced_by": artifact.produced_by,
+        },
+        subject_id=artifact.id,
+        producer="thymira.thy",
+    )
+    return state.model_copy(
+        update={
+            "summary": rendered,
+            "recommendation": recommendation,
+            "artifacts": (*state.artifacts, artifact),
+        }
+    ).model_dump()
 
 
 __all__ = ["compare_experiments", "summarize_node"]

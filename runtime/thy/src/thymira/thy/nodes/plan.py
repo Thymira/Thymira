@@ -20,7 +20,6 @@ for it.
 
 from __future__ import annotations
 
-import re
 from enum import StrEnum
 from functools import lru_cache
 from types import GenericAlias
@@ -31,12 +30,23 @@ from pydantic_ai import Agent as PydanticAgent
 
 from thymira.agents.llm.routing import Role
 from thymira.agents.model_binding import routed_model
-from thymira.agents.prompt_framing import frame_untrusted
 from thymira.observability import agent as agent_observation
 from thymira.observability import guardrail
 from thymira.policies import allows_execution
-from thymira.schemas import ExecutionAction
-from thymira.thy.models import AgentTask, PlanOutput, ThyAgentKind
+from thymira.schemas import Decision, EventType, ExecutionAction
+from thymira.thy.models import PlanOutput, ThyAgentKind, ThyPlanReview
+from thymira.thy.plan_review import (
+    plan_candidate_sha256,
+    plan_candidate_snapshot,
+    plan_review_scope,
+    plan_review_scope_sha256,
+)
+from thymira.thy.planning_context import plan_for_request
+from thymira.thy.planning_contract import (
+    ContextualPlanningTask,
+    PlanningTask,
+)
+from thymira.tools.profile_paths import profile_output_guidance
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -53,7 +63,8 @@ if TYPE_CHECKING:
 _AGENT_DESCRIPTIONS: dict[str, str] = {
     "data": "inspect and profile the dataset (shape, dtypes, missing values, target candidates).",
     "coding": "write and run analysis or transformation code.",
-    "experiment": "train and evaluate a model as a single tracked experiment.",
+    "experiment": "train a new model as a single tracked experiment.",
+    "evaluation": "evaluate an existing registered model without training using evaluate_model.",
     "statistics-agent": "run and interpret an inferential or descriptive statistical test.",
     "data-quality-agent": "flag leakage, imbalance, drift and sensitive attributes.",
     "visualization-agent": "produce a captioned plot artifact.",
@@ -64,30 +75,6 @@ _AGENT_DESCRIPTIONS: dict[str, str] = {
     ),
 }
 
-_MODEL_REQUEST_PATTERN = (
-    r"\b(?:train(?:ing)?|model(?:s|ling)?|classifier|regression|random\s+forest|"
-    r"predict(?:ion)?|fit(?:ting)?|metric(?:s)?|evaluate)\b"
-)
-_MODEL_REQUEST_RE = re.compile(_MODEL_REQUEST_PATTERN, re.IGNORECASE)
-_NEGATED_SENTENCE_START_RE = re.compile(r"\b(?:do\s+not|don['\u2019]t)\b", re.IGNORECASE)
-_DIRECT_MODEL_MODIFIER = (
-    r"any|a|an|the|new|additional|further|more|separate|explicit|first|fresh|ever|"
-    r"actually|predictive|statistical|machine|learning|classification|logistic|linear|"
-    r"neural|network|deep|supervised|unsupervised"
-)
-_NEGATED_DIRECT_MODEL_START_RE = re.compile(
-    rf"\b(?:without|no)\b"
-    rf"(?=[\s:-]*(?:(?:{_DIRECT_MODEL_MODIFIER})\s+){{0,4}}{_MODEL_REQUEST_PATTERN})",
-    re.IGNORECASE,
-)
-_SCOPE_BOUNDARY_RE = re.compile(
-    r"[,.!?;\n]"
-    r"|\b(?:but|however|except|yet|so|therefore|then|while|whereas|although|though|"
-    r"when|during|before|after)\b"
-    r"|\band\s+(?:(?:we|you)\s+)?(?:need|must|should|will|want|plan|intend)\s+to\b",
-    re.IGNORECASE,
-)
-_DISCOURSE_ONLY_RE = re.compile(r"\b(?:however|nevertheless|nonetheless)\b", re.IGNORECASE)
 """One line per `ThyAgentKind` value THY's Plan model may ever propose. Filtered against the
 actual catalog by `_plan_instructions` -- see its docstring for why a static prompt was wrong."""
 
@@ -117,7 +104,10 @@ def _catalog_skill_name_type(skill_names: tuple[str, ...]) -> type[StrEnum]:
 
 @lru_cache(maxsize=32)
 def _catalog_plan_output_type(
-    agent_names: tuple[str, ...], skill_names: tuple[str, ...] = ()
+    agent_names: tuple[str, ...],
+    skill_names: tuple[str, ...] = (),
+    *,
+    contextual: bool = False,
 ) -> type[PlanOutput]:
     """Build a cached ``PlanOutput`` subtype matching both executable catalogs.
 
@@ -139,9 +129,10 @@ def _catalog_plan_output_type(
     else:
         skill_names_annotation = GenericAlias(tuple, (str, Ellipsis))
         skill_names_field = Field(default=(), max_length=0)
+    task_base = ContextualPlanningTask if contextual else PlanningTask
     catalog_task = create_model(
         "_CatalogAgentTask",
-        __base__=AgentTask,
+        __base__=task_base,
         agent=(catalog_kind, ...),
         skill_names=(skill_names_annotation, skill_names_field),
     )
@@ -156,7 +147,10 @@ def _catalog_plan_output_type(
 
 
 def _plan_instructions(
-    catalog: AgentCatalog, runtime_skill_catalog: RuntimeSkillCatalog | None = None
+    catalog: AgentCatalog,
+    runtime_skill_catalog: RuntimeSkillCatalog | None = None,
+    *,
+    contextual: bool = False,
 ) -> str:
     """Build Plan instructions from the same roster that constrains its structured schema.
 
@@ -167,19 +161,47 @@ def _plan_instructions(
     and `_catalog_plan_output_type`, so prose and machine-readable choices cannot drift again.
     """
     lines = [f"- {name}: {_AGENT_DESCRIPTIONS[name]}" for name in _plannable_agent_names(catalog)]
+    output_guidance = (
+        "Put each file this task promises to publish in outputs_to_publish with its exact "
+        "workspace-relative path and artifact kind. Use the path named by the user when one was "
+        "requested; otherwise choose a clear path and state the same path in the task instruction. "
+        "Keep outputs_to_publish empty when the task promises no file. Do not provide "
+        "required_artifacts; the runtime compiles outputs_to_publish into the execution contract "
+        "before policy review. Historical artifacts belong in artifact_references with a linked "
+        "source_run_id; registered dataset names are logical inputs, not artifact references."
+        if contextual
+        else "When the user requests named output files, put each exact workspace-relative path "
+        "in that task's required_artifacts, including its artifact kind when known. These are "
+        "acceptance criteria, not suggestions; do not invent paths. Leave required_artifacts "
+        "empty when no file output was requested."
+    )
     preamble = (
         "You are THY, planning a data-science run. Produce an ordered, non-empty list of "
         "AgentTask items, each naming the specialist agent, the ThyGraph phase it runs in "
         "(always 'execute'), and a concrete instruction. Choose each agent for the work it "
-        "owns, and only when the run needs that work. When the user requests named output files, "
-        "put each exact workspace-relative path in that task's required_artifacts, including its "
-        "artifact kind when known. These are acceptance criteria, not suggestions; do not invent "
-        "paths. kind='report' is only for a file MIRA's audit can read as a report -- Markdown, "
+        "owns, and only when the run needs that work. For a basic descriptive EDA with "
+        "distributions and numeric correlations, use the Data agent and instruct it to call "
+        "profile_dataset(include_plots=true). That tool publishes the profile and PNG charts; "
+        "do not add a Coding task just to recreate those charts. Use Coding for custom plots "
+        "or analysis beyond the deterministic profile. "
+        f"{profile_output_guidance() + ' ' if contextual else ''}"
+        f"{output_guidance} kind='report' is only for a file MIRA's audit can read as a report -- "
+        "Markdown, "
         "plain text, PDF, CSV or JSON; a '.ipynb' notebook is always kind='code', produced by "
-        "run_notebook, never kind='report'. Leave required_artifacts empty when no file output "
-        "was requested:"
+        "run_notebook, never kind='report':"
     )
-    trailer = "Name only these agents, spelled exactly as listed."
+    trailer = (
+        "Name only these agents, spelled exactly as listed. For metrics of an existing model "
+        "set work_kind=evaluate_existing. Never train a replacement to answer that request. "
+        "Use the verified prior model catalog; source_model_id is its exact model_artifact_id. "
+        "For explicit new training set work_kind=train_new. "
+        "A metrics deliverable must have kind=metrics and list requested metric_keys. "
+        "Only metrics may use match=content; every other artifact uses match=exact. "
+        "For metrics set match=content "
+        "for a planner-chosen "
+        "filename; keep match=exact only for a path explicitly required by the user. "
+        "Accuracy alone cannot satisfy precision, recall, F1 or ROC-AUC."
+    )
     runtime_skill_names = runtime_skill_catalog.names() if runtime_skill_catalog is not None else ()
     if runtime_skill_catalog is not None and runtime_skill_names:
         trailer = (
@@ -191,109 +213,6 @@ def _plan_instructions(
     else:
         trailer = f"{trailer}\nNo runtime skills are available; leave every skill_names empty."
     return f"{preamble}\n" + "\n".join(lines) + f"\n{trailer}"
-
-
-def _scope_has_content(text: str) -> bool:
-    """Return whether a would-be negated scope contains more than discourse punctuation."""
-    return bool(re.search(r"\w", _DISCOURSE_ONLY_RE.sub(" ", text)))
-
-
-def _negated_scope_end(prompt: str, content_start: int, *, comma_boundary: bool) -> int:
-    """Find the first grammatical boundary after a negator.
-
-    Commas end the shorter ``no``/``without`` phrases but not a coordinated ``do not`` list.
-    A contrast marker only ends either scope after real content; this keeps the parenthetical
-    ``do not, however, train`` under negation while exposing ``do not train X, but train Y``.
-    """
-    for match in _SCOPE_BOUNDARY_RE.finditer(prompt, content_start):
-        boundary = match.group()
-        if boundary == "," and not comma_boundary:
-            continue
-        if (boundary == "," or boundary[0].isalnum()) and not _scope_has_content(
-            prompt[content_start : match.start()]
-        ):
-            continue
-        return match.start()
-    return len(prompt)
-
-
-def _mask_negated_scopes(prompt: str, start_re: re.Pattern[str], *, comma_boundary: bool) -> str:
-    """Replace matching negated scopes with spaces while preserving all other text."""
-    masked = list(prompt)
-    for match in start_re.finditer(prompt):
-        end = _negated_scope_end(prompt, match.end(), comma_boundary=comma_boundary)
-        masked[match.start() : end] = " " * (end - match.start())
-    return "".join(masked)
-
-
-def _requires_experiment(prompt: str) -> bool:
-    """Return whether any positive scope asks for model training or measured evaluation.
-
-    Model terms inside ``do not`` lists are prohibitions, not requests. Remove those scopes up to
-    a sentence or genuine contrast boundary. Only remove ``without``/``no`` phrases when model
-    work follows the negator directly; an unrelated phrase such as ``no synthetic data while
-    training`` must leave the positive training clause visible. A later contrast remains visible:
-    ``do not train one model, but train another`` still requires Experiment.
-    """
-    positive_scope = _mask_negated_scopes(prompt, _NEGATED_SENTENCE_START_RE, comma_boundary=False)
-    positive_scope = _mask_negated_scopes(
-        positive_scope, _NEGATED_DIRECT_MODEL_START_RE, comma_boundary=True
-    )
-    return bool(_MODEL_REQUEST_RE.search(positive_scope))
-
-
-def _route_model_plan(
-    prompt: str, planned: PlanOutput, catalog: AgentCatalog
-) -> tuple[PlanOutput | None, str | None]:
-    """Ensure model work is assigned to a tracked, auditable agent.
-
-    THY's model proposes a plan, but code owns this invariant: a request that trains or evaluates
-    a model cannot be fulfilled by a generic coding task whose outputs MIRA cannot audit as an
-    experiment. `ML` (`ml-agent`) satisfies this the same way `EXPERIMENT` does: `execute_node`
-    folds a completed `ml-agent` settlement into a `schemas.Experiment` too (`experiments.py`'s
-    `experiment_from_ml_result`), so a plan that deliberately chose it is already tracked and is
-    left untouched. Existing experiment/ml tasks remain untouched; a coding task is upgraded only
-    when the planner omitted both specialists entirely -- the upgrade always targets `EXPERIMENT`,
-    never `ML`, since only the model can judge whether a request needs `ml-agent`'s tuning-helper
-    escalation.
-    """
-    if not _requires_experiment(prompt) or any(
-        task.agent in (ThyAgentKind.EXPERIMENT, ThyAgentKind.ML) for task in planned.tasks
-    ):
-        return planned, None
-    if ThyAgentKind.EXPERIMENT.value not in catalog.names():
-        return None, "model training requested but the experiment agent is unavailable"
-    tasks = list(planned.tasks)
-    coding_index = next(
-        (index for index, task in enumerate(tasks) if task.agent is ThyAgentKind.CODING), None
-    )
-    if coding_index is not None:
-        task = tasks[coding_index]
-        tasks[coding_index] = task.model_copy(
-            update={
-                "agent": ThyAgentKind.EXPERIMENT,
-                "instruction": (
-                    "Use the run_experiment tool for all model training and evaluation; do not "
-                    f"train the model through generic code. Original task: {task.instruction}"
-                ),
-            }
-        )
-    else:
-        tasks.append(
-            planned.tasks[0].model_copy(
-                update={
-                    "id": "model-experiment",
-                    "agent": ThyAgentKind.EXPERIMENT,
-                    "instruction": (
-                        "Use the run_experiment tool for the requested model training and "
-                        f"evaluation: {prompt}"
-                    ),
-                    "depends_on": tuple(task.id for task in planned.tasks),
-                    "required_artifacts": (),
-                }
-            )
-        )
-    return PlanOutput(tasks=tuple(tasks)), None
 
 
 def plan_node(
@@ -312,28 +231,18 @@ def plan_node(
 ) -> Callable[..., dict[str, Any]]:
     """Build the Plan node bound to `gate`.
 
-    A decision that does not allow execution (`BLOCK`, or `REQUIRE_HUMAN_REVIEW`, which no
-    synchronous answer can satisfy) records the reason on `state.error` and leaves `state.plan`
-    empty -- `_route_after_plan` (`thymira.thy.graph`) reads that to halt the graph before
-    Execute. An allowed decision populates `state.plan` and advances normally. Either way, the
+    A `BLOCK` decision records the reason on `state.error`; `REQUIRE_HUMAN_REVIEW` preserves a
+    separate pending candidate. Both leave `state.plan` empty and halt before Execute. An allowed
+    decision populates `state.plan` and advances normally. Either way, the
     decision is appended to `state.policy_signals`. A non-empty `state.plan` (a Core resume)
     short-circuits before any of that: it advances straight to Execute without calling the model
     or the Gate again.
     """
 
     def _plan(state: ThyState) -> dict[str, Any]:
-        if state.plan:
-            # A seeded plan (a Core resume after a human answered a tool-call review) was gated
-            # when it was proposed. Asking the model again could plan the waiting call away,
-            # and asking the Gate again would mint a second `plan.proposed` decision for it.
-            return state.advance().model_dump()
-        if (
-            state.execution_constraints is not None
-            and ExecutionAction.PLAN in state.execution_constraints.prohibited_actions
-        ):
-            return state.model_copy(
-                update={"error": "plan rejected: execution constraints prohibit plan.proposed"}
-            ).model_dump()
+        existing = _existing_plan_result(state)
+        if existing is not None:
+            return existing
         plannable_agent_names = _plannable_agent_names(catalog)
         if not plannable_agent_names:
             return state.model_copy(
@@ -342,7 +251,17 @@ def plan_node(
         plannable_skill_names = (
             runtime_skill_catalog.names() if runtime_skill_catalog is not None else ()
         )
-        plan_output_type = _catalog_plan_output_type(plannable_agent_names, plannable_skill_names)
+        conversation = state.run.conversation
+        clarification_context = conversation.clarification_context if conversation else ()
+        context_run_ids = conversation.context_run_ids if conversation else ()
+        contextual = conversation is not None and (
+            conversation.ordinal > 1 or bool(context_run_ids) or bool(clarification_context)
+        )
+        plan_output_type = _catalog_plan_output_type(
+            plannable_agent_names,
+            plannable_skill_names,
+            contextual=contextual,
+        )
         model = routed_model(
             Role.THY,
             "plan",
@@ -360,42 +279,15 @@ def plan_node(
         agent: PydanticAgent[None, PlanOutput] = PydanticAgent(
             model=model,
             output_type=plan_output_type,
-            instructions=_plan_instructions(catalog, runtime_skill_catalog),
+            instructions=_plan_instructions(
+                catalog,
+                runtime_skill_catalog,
+                contextual=contextual,
+            ),
             retries=1,
         )
-        constraints = state.execution_constraints
-        constraint_note = (
-            f"\nAuthorised execution constraints: {constraints.model_dump(mode='json')}"
-            if constraints is not None
-            else ""
-        )
-        registered = ", ".join(
-            f"{d.name} (target: {d.target})" if d.target else d.name for d in state.datasets
-        )
-        dataset_note = (
-            "\n"
-            + frame_untrusted(
-                f"Registered datasets: {registered}",
-                label="thy-dataset-catalog",
-            )
-            if registered
-            else ""
-        )
-        context_note = (
-            "\n"
-            + frame_untrusted(
-                f"Project context (.thymira/context.md):\n{state.project_context.strip()}",
-                label="thy-project-context",
-            )
-            if state.project_context
-            else ""
-        )
         with agent_observation(name="thy-plan", objective=state.run.prompt) as observation:
-            result = agent.run_sync(
-                f"Plan the run for: {state.run.prompt}{constraint_note}{dataset_note}{context_note}"
-            )
-            canonical_output = PlanOutput.model_validate(result.output.model_dump(mode="json"))
-            planned, planning_error = _route_model_plan(state.run.prompt, canonical_output, catalog)
+            planned, planning_error = plan_for_request(agent, state, catalog, contextual=contextual)
             observation.update(
                 output={"task_count": len(planned.tasks) if planned is not None else 0}
             )
@@ -406,15 +298,58 @@ def plan_node(
             raise AssertionError("model plan normalisation returned no plan without an error")
 
         with guardrail("policy-plan-proposed") as decision_observation:
+            candidate_snapshot = plan_candidate_snapshot(planned)
+            scope = plan_review_scope(
+                state.run,
+                state.execution_decision,
+                state.execution_constraints,
+                policy_sha256=gate.engine.policy_sha256,
+            )
+            candidate_sha256 = plan_candidate_sha256(planned)
+            scope_sha256 = plan_review_scope_sha256(scope)
             decision = gate.check_action(
                 subject_kind="run",
                 subject_id=state.run.id,
                 action_type="plan.proposed",
                 payload={"task_count": len(planned.tasks)},
-                summary="plan.proposed",
+                summary=_plan_review_summary(planned),
+                details={
+                    "action_type": "plan.proposed",
+                    "plan": candidate_snapshot,
+                    "plan_review": {
+                        "version": 1,
+                        "candidate_sha256": candidate_sha256,
+                        "scope_sha256": scope_sha256,
+                        "scope": scope,
+                    },
+                },
             )
             decision_observation.update(output={"decision": decision.decision.value})
         policy_signals = (*state.policy_signals, decision)
+        if decision.decision is Decision.REQUIRE_HUMAN_REVIEW:
+            request_event = next(
+                (
+                    event
+                    for event in reversed(event_log.events())
+                    if event.type is EventType.HUMAN_APPROVAL_REQUESTED
+                    and event.payload.get("decision_id") == decision.id
+                ),
+                None,
+            )
+            if request_event is None or request_event.hash is None:
+                raise RuntimeError("plan review Gate did not persist its approval request")
+            pending = ThyPlanReview(
+                candidate=planned,
+                decision=decision,
+                request_event_id=request_event.event_id,
+                request_event_hash=request_event.hash,
+                candidate_sha256=candidate_sha256,
+                scope_sha256=scope_sha256,
+                scope=scope,
+            )
+            return state.model_copy(
+                update={"pending_plan_review": pending, "policy_signals": policy_signals}
+            ).model_dump()
         if not allows_execution(decision):
             return state.model_copy(
                 update={
@@ -429,6 +364,36 @@ def plan_node(
         ).model_dump()
 
     return _plan
+
+
+def _existing_plan_result(state: ThyState) -> dict[str, Any] | None:
+    """Preserve pending/seeded continuations and refuse prohibited planning before model calls."""
+    if state.pending_plan_review is not None:
+        if state.plan:
+            return state.model_copy(
+                update={"error": "pending plan review cannot be an executable seeded plan"}
+            ).model_dump()
+        return state.model_dump()
+    if state.plan:
+        # The candidate was authorized before seeding. Replanning or re-gating would replace it.
+        return state.advance().model_dump()
+    if (
+        state.execution_constraints is not None
+        and ExecutionAction.PLAN in state.execution_constraints.prohibited_actions
+    ):
+        return state.model_copy(
+            update={"error": "plan rejected: execution constraints prohibit plan.proposed"}
+        ).model_dump()
+    return None
+
+
+def _plan_review_summary(plan: PlanOutput) -> str:
+    """Describe the candidate's actual tasks and promised outputs for the approval surface."""
+    tasks = []
+    for task in plan.tasks:
+        outputs = ", ".join(item.name for item in task.required_artifacts) or "no named files"
+        tasks.append(f"{task.id}: {task.instruction} (outputs: {outputs})")
+    return "Review the proposed plan: " + "; ".join(tasks)
 
 
 __all__ = ["plan_node"]
