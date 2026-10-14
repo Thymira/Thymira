@@ -59,6 +59,7 @@ from thymira.tools import (
     ToolRegistry,
     ToolResult,
 )
+from thymira.tools.builtins.run_python import RunPython
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -325,6 +326,63 @@ def test_a_failed_delegation_diagnoses_from_the_last_failed_tool_call(tmp_path: 
     assert task.status is TaskStatus.FAILED
     assert task.error == "disk full"
     assert len(broken.seen_invocation) == 2
+
+
+def test_a_repeated_python_syntax_failure_is_preserved_in_settlement_and_task_error(
+    tmp_path: Path,
+) -> None:
+    catalog = _catalog(tmp_path, tool_allowlist=("run_python",))
+    spec = catalog.get("data").model_copy(update={"max_turns": 4})
+    run_id = new_id("run")
+    log = InMemoryEventLog(run_id)
+    tool_context = _tool_context(tmp_path, run_id=run_id, log=log)
+    provider = ScriptedProvider(
+        [
+            LLMToolCall(
+                id="call-1",
+                name="run_python",
+                arguments={
+                    "code": "print('before')\\nprint('after')",
+                    "description": "test invalid syntax",
+                },
+            ),
+            LLMToolCall(
+                id="call-2",
+                name="run_python",
+                arguments={
+                    "code": "print('before')\\nprint('after')",
+                    "description": "test invalid syntax",
+                },
+            ),
+            LLMToolCall(
+                id="call-3",
+                name="final_result",
+                arguments={"row_count": 1, "columns": ["value"]},
+            ),
+        ]
+    )
+    ctx = AgentContext(
+        route_policy=TEST_ROUTE_POLICY,
+        catalog=catalog,
+        event_log=log,
+        provider=provider,
+        tool_registry=ToolRegistry((cast("Tool", RunPython()),)),
+        tool_context=tool_context,
+    )
+
+    settlement = _terminal(Delegator(ctx).delegate("thy", spec, "profile it", depth=0))
+
+    reason = (
+        "run_python rejected the same syntactically invalid source twice in this delegation. "
+        "Correct the source before trying again; the delegation stopped before requesting "
+        "another model response."
+    )
+    assert settlement.result.stop_reason is StopReason.FAILED
+    assert settlement.result.diagnostics == reason
+    assert settlement.task.status is TaskStatus.FAILED
+    assert settlement.task.summary is None
+    assert settlement.task.error == reason
+    assert len(provider.calls) == 2
 
 
 def test_a_delegated_tool_failure_keeps_lifecycle_identity_on_completion(tmp_path: Path) -> None:

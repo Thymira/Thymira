@@ -58,7 +58,6 @@ carrying the matching `resume` argument continues it with PydanticAI's own `mess
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from enum import StrEnum
 from math import ceil
 from typing import TYPE_CHECKING, Any
 
@@ -73,22 +72,34 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
-from pydantic_ai.usage import RunUsage, UsageLimits
+from pydantic_ai.usage import RunUsage
 
+from thymira.agents.failure_outcome import AgentEndReason, model_failure_details
 from thymira.agents.history import compact_superseded_write_content
+from thymira.agents.lifecycle_evidence import (
+    _delegation_payload,
+    _resume_terminal_payload,
+    _step_key,
+    _usage_payload,
+)
+from thymira.agents.llm.base import LLMCallError
 from thymira.agents.llm.routing import RANK, choose, floor_for
 from thymira.agents.model_binding import _messages_for_provider, routed_model
 from thymira.agents.prompts import PromptBuilder, PromptEnvironment
+from thymira.agents.publication_feedback import publication_output_validator
+from thymira.agents.request_budget import step_request_limits
 from thymira.agents.resume import (
     build_execution_identity,
     continuation_key,
     save_pending_resume,
 )
+from thymira.agents.retry_policy import retry_stop_reason_for_task
 from thymira.agents.runtime_context import RUNTIME_CONTEXT_FORM, runtime_context_text
+from thymira.agents.task_completion import assess_task_completion, completion_authority_payload
 from thymira.agents.tool_bridge import build_agent_tools
-from thymira.events import canonical_json, sha256_text
+from thymira.events import canonical_json
 from thymira.observability import agent as agent_observation
-from thymira.schemas import Actor, EventSurface, EventType, StopReason, TaskStatus, ToolCallStatus
+from thymira.schemas import Actor, EventSurface, EventType, StopReason, TaskStatus
 from thymira.tools import tool_guidance
 
 if TYPE_CHECKING:
@@ -99,17 +110,17 @@ if TYPE_CHECKING:
 
     from thymira.agents.llm.base import LLMMessage, LLMProvider, LLMResponse, LLMToolDefinition
     from thymira.agents.llm.routing import ModelChoice
-    from thymira.agents.prompts import AssembledPrompt
     from thymira.agents.request_ledger import RequestLedger
     from thymira.agents.resume import PendingResume
     from thymira.agents.runtime_catalog import RuntimeSkillCatalog
     from thymira.agents.settlement import DelegationIdentity
     from thymira.agents.spec import AgentCatalog, AgentSpec
+    from thymira.agents.task_completion import TaskCompletionValidator
     from thymira.agents.usage import ConcurrentRunUsage
     from thymira.agents.usage import RunUsage as SharedRunUsage
     from thymira.events import EventLog
     from thymira.observability.tracing import Handle
-    from thymira.schemas import Event, ModelRoutePolicy, Task
+    from thymira.schemas import ModelRoutePolicy, Task
     from thymira.state import ArtifactStore
     from thymira.tools import ToolContext, ToolRegistry
 
@@ -340,40 +351,6 @@ def _estimate_provider_request(
     return ceil(len(encoded) / 4) if encoded else 0
 
 
-class AgentEndReason(StrEnum):
-    """Why a step ended, recorded as ``end_reason`` on every ``agent.completed``.
-
-    ``COMPLETED``: a validated output. ``MAX_TURNS``: PydanticAI exhausted the step's retries or
-    request limit. ``AWAITING_APPROVAL``: a tool call needs a human's answer; the step remains
-    in-flight after its ``agent.parked`` checkpoint and the task is PENDING until the runtime
-    re-runs it. ``TOOL_FAILURE``: the validated output followed an unresolved failed tool call.
-    ``CONTEXT_BUDGET``: durable compaction could not reduce the prompt enough for dispatch, so
-    the provider was not called. ``RESUME_HISTORY``: a parked history could not be transformed
-    into a checkpoint-aware conversation without silently dropping or duplicating user context.
-    """
-
-    COMPLETED = "completed"
-    MAX_TURNS = "max_turns"
-    AWAITING_APPROVAL = "awaiting_approval"
-    TOOL_FAILURE = "tool_failure"
-    CONTEXT_BUDGET = "context_budget"
-    RESUME_HISTORY = "resume_history"
-
-
-def _step_key(spec: AgentSpec, task: Task, assembled: AssembledPrompt) -> str:
-    """Hash the stable inputs that identify one isolated agent step."""
-    return sha256_text(
-        canonical_json(
-            {
-                "spec": spec.model_dump(mode="json"),
-                "task_id": task.id,
-                "objective": task.objective,
-                "prompt": assembled.model_dump(mode="json"),
-            }
-        )
-    )
-
-
 def _validate_resume_identity(
     resume: PendingResume, spec: AgentSpec, task: Task, task_kind: str
 ) -> None:
@@ -390,39 +367,6 @@ def _validate_resume_identity(
         raise ValueError("parked model choice does not match the continuation role or task")
     if RANK[choice.tier_applied] < RANK[floor_for(spec.role)]:
         raise ValueError("parked model choice is below the current role floor")
-
-
-def _usage_payload(
-    run_usage: RunUsage, shared: SharedRunUsage | None, cost_before: float | None
-) -> dict[str, Any]:
-    """This step's tokens and cost, for the `agent.completed` event (THY-30).
-
-    Tokens come from the run's own aggregated `RunUsage` (PydanticAI sums every request's
-    `RequestUsage`, so a multi-turn step reports the whole step). Cost is the *delta* of the
-    shared run budget across this step: cost lives only on the real `LLMResponse` and is
-    accumulated into `ctx.usage` by `routed_model`, never on any pre-call event, so the honest
-    per-agent figure is what the budget grew by while this step ran. With no shared accumulator
-    (an unmetered run) cost is unknown and reported as `0.0`. The fold in `thymira.cli` sums these
-    per agent for its per-agent token/cost line; the totals match the run's usage exactly.
-
-    A budget total of `None` means a model call reported no price
-    (`thymira.agents.usage.RunUsage.add_cost`), so the delta is unmeasurable and the payload says
-    `null` rather than claiming the step cost nothing. Only the *metered* path can say that: the
-    unmetered `shared is None` case keeps reporting `0.0`, because there no budget was ever asked
-    for and no ceiling depends on the answer.
-    """
-    cost: float | None
-    if shared is None:
-        cost = 0.0
-    elif shared.cost_usd is None or cost_before is None:
-        cost = None
-    else:
-        cost = shared.cost_usd - cost_before
-    return {
-        "input_tokens": int(run_usage.input_tokens or 0),
-        "output_tokens": int(run_usage.output_tokens or 0),
-        "cost_usd": cost,
-    }
 
 
 def _context_budget_failure(
@@ -561,27 +505,6 @@ def _runtime_context_or_reason(tool_context: ToolContext) -> str:
         )
 
 
-def _delegation_payload(delegation: DelegationIdentity | None) -> dict[str, Any]:
-    """The three fields that mark a lifecycle event as belonging to a delegation, or nothing."""
-    if delegation is None:
-        return {}
-    return {
-        "parent_agent": delegation.parent_agent,
-        "delegation_key": delegation.delegation_key,
-        "delegation_depth": delegation.delegation_depth,
-    }
-
-
-def _resume_terminal_payload(resume: PendingResume | None) -> dict[str, Any]:
-    """Mark a terminal event as the close of its original parked execution identity."""
-    if resume is None:
-        return {}
-    return {
-        "resumed": True,
-        "execution_identity_sha256": resume.identity.digest(),
-    }
-
-
 @dataclass
 class AgentContext:
     """Everything `AgentRunner.run` needs beyond the spec and the task.
@@ -636,6 +559,8 @@ class AgentContext:
     compaction_context: Any | None = None
     """The graph-owned compaction dependencies used by ``context_budget`` before a call."""
     route_policy: ModelRoutePolicy | None = None
+    task_completion_validator: TaskCompletionValidator | None = None
+    """Optional code-owned requirements for this task, reapplied on fresh runs and resumes."""
 
 
 @dataclass(frozen=True)
@@ -653,6 +578,49 @@ class AgentResult:
     usage: RunUsage
     task_status: TaskStatus
     stop_reason: StopReason
+
+
+def _record_exhaustion(
+    spec: AgentSpec,
+    task: Task,
+    ctx: AgentContext,
+    observation: Handle,
+    *,
+    stop_reason: StopReason,
+    step_key: str,
+    resume: PendingResume | None,
+    usage: RunUsage,
+    cost_before: float | None,
+    reason: str | None = None,
+    end_reason: AgentEndReason = AgentEndReason.MAX_TURNS,
+) -> AgentResult:
+    """Close a step that ended without output, retaining a specific terminal diagnosis."""
+    payload: dict[str, Any] = {
+        "agent": spec.name,
+        "task_id": task.id,
+        "status": TaskStatus.FAILED.value,
+        "end_reason": end_reason.value,
+        "stop_reason": stop_reason.value,
+        "step_key": step_key,
+        **_resume_terminal_payload(resume),
+        **_usage_payload(usage, ctx.usage, cost_before),
+        **_delegation_payload(ctx.delegation),
+    }
+    if reason is None:
+        payload["max_turns"] = spec.max_turns
+        reason = f"exhausted max_turns={spec.max_turns}"
+    else:
+        payload["reason"] = reason
+    ctx.event_log.append(
+        EventType.AGENT_COMPLETED,
+        ctx.actor,
+        payload,
+        subject_id=task.agent_id,
+    )
+    observation.update(output={"status": TaskStatus.FAILED.value}, failed=True, reason=reason)
+    return AgentResult(
+        output=None, usage=usage, task_status=TaskStatus.FAILED, stop_reason=stop_reason
+    )
 
 
 class AgentRunner:
@@ -767,6 +735,7 @@ class AgentRunner:
         fit_retries = getattr(context_budget_outcome, "retries", 0)
         resume_messages: list[ModelMessage] | None = None
         resume_history_error: str | None = None
+        repeated_python_failure_reason: str | None = None
         if resume is not None:
             try:
                 resume_messages = _resume_messages(resume.messages, assembled.user)
@@ -822,6 +791,9 @@ class AgentRunner:
                         ),
                         retries=fit_retries,
                     )
+        repeated_python_failure_reason = retry_stop_reason_for_task(
+            ctx.event_log.events(), task.id, artifact_store, ctx.tool_registry, tool_context
+        )
         step_key = (
             resume.identity.step_key if resume is not None else _step_key(spec, task, assembled)
         )
@@ -834,7 +806,11 @@ class AgentRunner:
             if ctx.before_model_call is not None:
                 ctx.before_model_call(choice)
 
-        if not context_budget_stopped and resume_history_error is None:
+        if (
+            not context_budget_stopped
+            and resume_history_error is None
+            and repeated_python_failure_reason is None
+        ):
             provider_guard = None
             resume_budget = ctx.context_budget
             if resume is not None and resume_budget is not None:
@@ -884,35 +860,38 @@ class AgentRunner:
                 route_policy=ctx.route_policy,
             )
             tools = (
-                build_agent_tools(spec, ctx.tool_registry, tool_context, usage=ctx.usage)
+                build_agent_tools(
+                    spec,
+                    ctx.tool_registry,
+                    tool_context,
+                    usage=ctx.usage,
+                )
                 if ctx.tool_registry is not None and tool_context is not None
                 else ()
             )
-            # ty cannot resolve `Agent.__init__`'s overloads against a heterogeneous `output_type`
-            # list (verified against the pinned ty version): the annotation below is what the call
-            # actually returns, confirmed against PydanticAI 2.33.0 by `reveal_type`.
+            # ty cannot resolve the heterogeneous output_type overload; the annotated return
+            # was verified against PydanticAI 2.33.0 with reveal_type.
             agent: PydanticAgent[None, BaseModel | DeferredToolRequests] = PydanticAgent(  # ty: ignore[invalid-assignment, no-matching-overload]
                 model=model,
-                # `DeferredToolRequests` is not an output tool: it lets a tool end the step with
-                # `ApprovalRequired` (the bridge, on a review the Gate left pending) instead of
-                # PydanticAI raising `UserError`. The output tool keeps its `final_result` name.
+                # DeferredToolRequests parks ApprovalRequired instead of raising UserError.
                 output_type=[output_schema, DeferredToolRequests],
                 instructions=assembled.system,
                 retries=max(spec.max_turns - 1, 0),
                 tools=tools,
-                # Several tool calls the model requests in one turn are deferred and resumed
-                # together (`thymira.agents.resume`'s all-or-nothing contract). Reproduced live
-                # against a real Run: when every one of a multi-call turn needed a human review,
-                # resuming re-executed all of them but one call's `ToolReturnPart` never reached
-                # the persisted conversation -- the model kept that call dangling, the runtime
-                # re-asked for it while the other calls' already-spent tickets stayed spent, and a
-                # later resume replayed them a second time under those stale decisions (MIRA's
-                # A3). One tool call per turn makes that split impossible to construct -- a
-                # deferred turn is always exactly one call, so it is always all-resolved or
-                # all-pending, never a mix -- closing the scenario
-                # `_require_intact_deferred_batches` only detects after the fact.
+                # One call per turn keeps approval resumes all-resolved or all-pending;
+                # mixed deferred batches previously replayed tools under spent decisions.
                 model_settings=ModelSettings(parallel_tool_calls=False),
                 capabilities=(ProcessHistory(compact_superseded_write_content),),
+            )
+            agent.output_validator(
+                publication_output_validator(
+                    spec,
+                    task,
+                    ctx.event_log,
+                    artifact_store,
+                    ctx.task_completion_validator,
+                    ctx.actor,
+                )
             )
 
         with agent_observation(name=spec.name, objective=task.objective) as observation:
@@ -943,6 +922,20 @@ class AgentRunner:
                     pydantic_usage=pydantic_usage,
                     cost_before=cost_before,
                 )
+            if repeated_python_failure_reason is not None:
+                return _record_exhaustion(
+                    spec,
+                    task,
+                    ctx,
+                    observation,
+                    stop_reason=StopReason.FAILED,
+                    step_key=step_key,
+                    resume=resume,
+                    usage=pydantic_usage,
+                    cost_before=cost_before,
+                    reason=repeated_python_failure_reason,
+                    end_reason=AgentEndReason.TOOL_FAILURE,
+                )
             if context_budget_stopped:
                 return _context_budget_failure(
                     ctx,
@@ -960,13 +953,13 @@ class AgentRunner:
                     result = agent.run_sync(
                         message_history=resume_messages or [],
                         deferred_tool_results=resume.deferred_tool_results,
-                        usage_limits=UsageLimits(request_limit=spec.max_turns),
+                        usage_limits=step_request_limits(spec, task, ctx.event_log),
                         usage=pydantic_usage,
                     )
                 else:
                     result = agent.run_sync(
                         assembled.user,
-                        usage_limits=UsageLimits(request_limit=spec.max_turns),
+                        usage_limits=step_request_limits(spec, task, ctx.event_log),
                         usage=pydantic_usage,
                     )
             except _ResumeContextBudgetExceededError as exc:
@@ -981,9 +974,8 @@ class AgentRunner:
                     cost_before=cost_before,
                 )
             except UsageLimitExceeded:
-                # The child exhausted a bound it was given, which is not the same fact as an
-                # error it could name: `out-of-room`, not `failed` (F7.1).
-                return self._record_exhaustion(
+                # The task exhausted its cumulative request budget, including prior approvals.
+                return _record_exhaustion(
                     spec,
                     task,
                     ctx,
@@ -994,8 +986,8 @@ class AgentRunner:
                     usage=pydantic_usage,
                     cost_before=cost_before,
                 )
-            except UnexpectedModelBehavior:
-                return self._record_exhaustion(
+            except (LLMCallError, UnexpectedModelBehavior) as exc:
+                return _record_exhaustion(
                     spec,
                     task,
                     ctx,
@@ -1005,6 +997,7 @@ class AgentRunner:
                     resume=resume,
                     usage=pydantic_usage,
                     cost_before=cost_before,
+                    **model_failure_details(exc),
                 )
 
             if isinstance(result.output, DeferredToolRequests):
@@ -1067,17 +1060,22 @@ class AgentRunner:
                 )
 
             output_exit_code = getattr(result.output, "exit_code", None)
-            unresolved = (
-                _unresolved_tool_failures(ctx.event_log.events(), task.id)
-                if isinstance(output_exit_code, int)
-                else ()
-            )
-            if isinstance(output_exit_code, int) and output_exit_code != 0:
-                unresolved = (*unresolved, ("final result", f"exit code {output_exit_code}"))
-            if unresolved:
-                reason = "; ".join(
-                    f"{tool}: {error}" if error else tool for tool, error in unresolved
+            events = ctx.event_log.events()
+            completion_evidence = assess_task_completion(events, task.id, artifact_store)
+            if ctx.task_completion_validator is not None:
+                completion_evidence = ctx.task_completion_validator(
+                    task, result.output, events, completion_evidence
                 )
+            if isinstance(output_exit_code, int) and output_exit_code != 0:
+                completion_evidence = replace(
+                    completion_evidence,
+                    validation_failures=(
+                        *completion_evidence.validation_failures,
+                        f"final result: exit code {output_exit_code}",
+                    ),
+                )
+            reason = completion_evidence.error
+            if reason:
                 ctx.event_log.append(
                     EventType.AGENT_COMPLETED,
                     ctx.actor,
@@ -1089,6 +1087,7 @@ class AgentRunner:
                         "stop_reason": StopReason.FAILED.value,
                         "step_key": step_key,
                         "reason": reason,
+                        "completion_evidence": completion_authority_payload(completion_evidence),
                         **_resume_terminal_payload(resume),
                         **_delegation_payload(ctx.delegation),
                         **_usage_payload(result.usage, ctx.usage, cost_before),
@@ -1115,6 +1114,7 @@ class AgentRunner:
                     "end_reason": AgentEndReason.COMPLETED.value,
                     "stop_reason": StopReason.COMPLETED.value,
                     "step_key": step_key,
+                    "completion_evidence": completion_authority_payload(completion_evidence),
                     **_resume_terminal_payload(resume),
                     **_usage_payload(result.usage, ctx.usage, cost_before),
                     **_delegation_payload(ctx.delegation),
@@ -1128,73 +1128,6 @@ class AgentRunner:
                 task_status=TaskStatus.COMPLETED,
                 stop_reason=StopReason.COMPLETED,
             )
-
-    def _record_exhaustion(
-        self,
-        spec: AgentSpec,
-        task: Task,
-        ctx: AgentContext,
-        observation: Handle,
-        *,
-        stop_reason: StopReason,
-        step_key: str,
-        resume: PendingResume | None,
-        usage: RunUsage,
-        cost_before: float | None,
-    ) -> AgentResult:
-        """Close a step that ended without an output, recording *which* bound ended it.
-
-        `end_reason` stays `MAX_TURNS` for both: it is the coarse lifecycle fact every existing
-        consumer reads, while `stop_reason` is the finer terminal one this step is the only place
-        that can tell apart.
-        """
-        ctx.event_log.append(
-            EventType.AGENT_COMPLETED,
-            ctx.actor,
-            {
-                "agent": spec.name,
-                "task_id": task.id,
-                "status": TaskStatus.FAILED.value,
-                "end_reason": AgentEndReason.MAX_TURNS.value,
-                "stop_reason": stop_reason.value,
-                "max_turns": spec.max_turns,
-                "step_key": step_key,
-                **_resume_terminal_payload(resume),
-                **_usage_payload(usage, ctx.usage, cost_before),
-                **_delegation_payload(ctx.delegation),
-            },
-            subject_id=task.agent_id,
-        )
-        observation.update(
-            output={"status": TaskStatus.FAILED.value},
-            failed=True,
-            reason=f"exhausted max_turns={spec.max_turns}",
-        )
-        return AgentResult(
-            output=None, usage=usage, task_status=TaskStatus.FAILED, stop_reason=stop_reason
-        )
-
-
-def _unresolved_tool_failures(
-    events: Sequence[Event], task_id: str
-) -> tuple[tuple[str, str | None], ...]:
-    """Return tools whose latest task-scoped execution ended unsuccessfully."""
-    latest: dict[str, tuple[bool, str | None]] = {}
-    for event in events:
-        if event.type is not EventType.TOOL_COMPLETED or event.payload.get("task_id") != task_id:
-            continue
-        tool = event.payload.get("tool")
-        if not isinstance(tool, str):
-            continue
-        status = event.payload.get("status")
-        status_value = status.value if isinstance(status, ToolCallStatus) else status
-        exit_code = event.payload.get("exit_code")
-        failed = status_value == ToolCallStatus.FAILED.value or (
-            isinstance(exit_code, int) and exit_code != 0
-        )
-        error = event.payload.get("error")
-        latest[tool] = (failed, error if isinstance(error, str) else None)
-    return tuple((tool, error) for tool, (failed, error) in latest.items() if failed)
 
 
 __all__ = ["AgentContext", "AgentEndReason", "AgentResult", "AgentRunner", "ResumeHistoryError"]

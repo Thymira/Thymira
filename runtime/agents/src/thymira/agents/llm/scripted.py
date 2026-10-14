@@ -21,6 +21,11 @@ from thymira.agents.llm.base import (
     LLMToolCall,
     LLMToolDefinition,
 )
+from thymira.agents.llm.litellm_provider import (
+    estimate_structured_input_tokens,
+    estimate_text_tokens,
+)
+from thymira.agents.llm.validation_feedback import validation_feedback
 
 ScriptedItem = str | dict[str, Any] | BaseModel
 ScriptedTurn = Callable[[Sequence[LLMMessage]], ScriptedItem]
@@ -33,6 +38,46 @@ def _as_text(item: ScriptedItem) -> str:
     if isinstance(item, BaseModel):
         return item.model_dump_json()
     return json.dumps(item, ensure_ascii=False, sort_keys=True)
+
+
+def _bounded_usage(
+    response: LLMResponse,
+    *,
+    model: str,
+    prompt: str,
+    system: str,
+    schema: type[BaseModel],
+) -> LLMResponse:
+    """Use explicit scripted counts or mark a local, request-exact synthetic estimate."""
+    metadata = dict(response.metadata)
+    if (
+        metadata.get("usage_known") is False
+        or metadata.get("session_chat_usage_source") == "unknown"
+    ):
+        return response
+    source = metadata.get("session_chat_usage_source")
+    if (
+        metadata.get("usage_known") is True
+        or source in {"scripted_local_estimate", "scripted_explicit"}
+        or response.input_tokens > 0
+        or response.output_tokens > 0
+    ):
+        usage_source = "scripted_explicit"
+    else:
+        input_tokens = estimate_structured_input_tokens(model, prompt, system, schema)
+        output_tokens = estimate_text_tokens(model, response.text)
+        response = response.model_copy(
+            update={"input_tokens": input_tokens, "output_tokens": output_tokens}
+        )
+        usage_source = "scripted_local_estimate"
+    return response.model_copy(
+        update={
+            "metadata": {
+                **response.metadata,
+                "session_chat_usage_source": usage_source,
+            }
+        }
+    )
 
 
 class ScriptedProvider:
@@ -154,7 +199,7 @@ class ScriptedProvider:
                 validated = schema.model_validate(item.model_dump())
             else:
                 validated = schema.model_validate(item)
-        except ValidationError:
+        except ValidationError as exc:
             response = LLMResponse(
                 text=_as_text(item),
                 provider=self.provider_name,
@@ -162,7 +207,8 @@ class ScriptedProvider:
                 metadata={"api": "scripted.structured", "schema": schema.__name__},
             )
             raise LLMStructuredOutputError(
-                f"the scripted response does not satisfy {schema.__name__}",
+                f"the scripted response does not satisfy {schema.__name__}. "
+                + validation_feedback(exc, schema),
                 response=response,
             ) from None
         response = LLMResponse(
@@ -172,3 +218,42 @@ class ScriptedProvider:
             metadata={"api": "scripted.structured", "schema": schema.__name__},
         )
         return validated, response
+
+    def complete_structured_bounded(
+        self,
+        prompt: str,
+        *,
+        schema: type[BaseModelT],
+        system: str = "",
+        max_output_tokens: int,
+    ) -> tuple[BaseModelT, LLMResponse]:
+        """Expose a deterministic bounded-chat surface with explicitly synthetic usage.
+
+        Ordinary scripted calls retain their existing zero-usage behavior. SessionChat opts into
+        this method explicitly; absent caller-supplied counts, its response receives local
+        LiteLLM tokenizer estimates based on the exact prompt, system and schema it was shown.
+        """
+        if max_output_tokens < 1:
+            raise ValueError("max_output_tokens must be positive")
+        try:
+            proposal, response = self.complete_structured(prompt, schema=schema, system=system)
+        except LLMStructuredOutputError as exc:
+            if exc.response is None:
+                raise
+            response = _bounded_usage(
+                exc.response,
+                model=self.model,
+                prompt=prompt,
+                system=system,
+                schema=schema,
+            )
+            raise LLMStructuredOutputError(str(exc), response=response) from None
+        response = _bounded_usage(
+            response,
+            model=self.model,
+            prompt=prompt,
+            system=system,
+            schema=schema,
+        )
+        self.calls[-1]["max_output_tokens"] = max_output_tokens
+        return proposal, response

@@ -4712,6 +4712,7 @@ dependencies = [
     { name = "thymira-policies" },
     { name = "thymira-schemas" },
     { name = "thymira-tools" },
+    { name = "typing-extensions" },
 ]
 
 [package.metadata]
@@ -4724,6 +4725,7 @@ requires-dist = [
     { name = "thymira-policies", editable = "runtime/policies" },
     { name = "thymira-schemas", editable = "packages/schemas" },
     { name = "thymira-tools", editable = "runtime/tools" },
+    { name = "typing-extensions", specifier = ">=4.12,<5" },
 ]
 
 [[package]]

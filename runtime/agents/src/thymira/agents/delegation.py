@@ -74,6 +74,7 @@ if TYPE_CHECKING:
     from thymira.agents.runner import AgentContext
     from thymira.agents.settlement import Settlement
     from thymira.agents.spec import AgentSpec
+    from thymira.agents.task_completion import TaskCompletionValidator
     from thymira.schemas import Event
 
 _FAILED_ERROR = "agent exceeded max_turns"
@@ -97,17 +98,33 @@ def _abnormal_diagnosis(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {exc}"
 
 
-def _diagnose_failure(events: Sequence[Event]) -> str:
-    """The last failed or denied tool call's own error, or the generic message if none happened.
+def _diagnose_failure(events: Sequence[Event], delegation: _Delegation) -> str:
+    """Prefer this task's terminal reason, then its last failed tool, then the generic message.
 
     A `tool.completed` -- including a failed call, there is no separate `tool.failed` event --
     carries its reason as `error`; a `tool.denied` -- the Gate refusing the call outright, or a
     review left pending for a human -- carries it as `reason` instead
     (`ToolManager._record_review_denial`). Both are "what made this step end", so both are read
-    here.
+    here. A terminal `agent.completed.reason` is more specific than an earlier recoverable tool
+    failure, but only when its task, agent subject and delegation key all match this invocation.
     """
     for event in reversed(events):
-        if event.type not in _FAILED_TOOL_STATUSES:
+        if (
+            event.run_id == delegation.task.run_id
+            and event.type is EventType.AGENT_COMPLETED
+            and event.subject_id == delegation.task.agent_id
+            and event.payload.get("task_id") == delegation.task.id
+            and event.payload.get("delegation_key") == delegation.key
+        ):
+            reason = event.payload.get("reason")
+            if isinstance(reason, str) and reason:
+                return reason
+    for event in reversed(events):
+        if (
+            event.run_id != delegation.task.run_id
+            or event.type not in _FAILED_TOOL_STATUSES
+            or event.payload.get("task_id") != delegation.task.id
+        ):
             continue
         error = event.payload.get("error") or event.payload.get("reason")
         if error:
@@ -187,6 +204,7 @@ class Delegator:
         resume: PendingResume | None = None,
         task: Task | None = None,
         skill_names: tuple[str, ...] = (),
+        task_completion_validator: TaskCompletionValidator | None = None,
     ) -> Settlement | PendingDelegation:
         """Run `spec` at `depth + 1` on a fresh `Task` and settle it, whatever happened.
 
@@ -205,6 +223,8 @@ class Delegator:
                 continuation. Omit for a fresh delegation.
             skill_names: Runtime skill names explicitly selected for this task. Bodies are loaded
                 only after this selection reaches `AgentRunner`.
+            task_completion_validator: Optional code-owned completion contract for the task. THY
+                supplies this on fresh dispatch and rebuilds it from the plan when resuming.
 
         Returns:
             The child's terminal `Settlement`, or a `PendingDelegation` while a human answer is
@@ -268,6 +288,7 @@ class Delegator:
         )
         child_ctx = replace(
             self._child_context(task, child_depth, spec.name),
+            task_completion_validator=task_completion_validator,
             delegation=DelegationIdentity(
                 parent_agent=parent_agent,
                 delegation_key=delegation.key,
@@ -288,7 +309,7 @@ class Delegator:
                 delegation, StopReason.ABNORMAL, diagnostics=_abnormal_diagnosis(exc)
             )
         diagnosis = (
-            _diagnose_failure(self._ctx.event_log.events()[events_before:])
+            _diagnose_failure(self._ctx.event_log.events()[events_before:], delegation)
             if result.task_status in _DIAGNOSED_STATUSES
             else None
         )

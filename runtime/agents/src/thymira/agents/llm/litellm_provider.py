@@ -39,13 +39,15 @@ from thymira.agents.llm.base import (
     LLMToolCall,
     LLMToolDefinition,
 )
+from thymira.agents.llm.provider_diagnostics import extract_provider_diagnostics
 from thymira.agents.llm.proxy import resolve_proxy_endpoint, with_proxy_endpoint
+from thymira.agents.llm.validation_feedback import validation_feedback
 from thymira.schemas import ReasoningMetadata, ReasoningStatus, ResponseOutcome
 
 if TYPE_CHECKING:
     from collections.abc import Collection, Sequence
 
-    from thymira.agents.request_ledger import RequestLease, RequestLedger
+    from thymira.agents.request_ledger import EvidenceLedger, RequestLease
     from thymira.schemas import Event
 
 
@@ -127,9 +129,9 @@ def _accepts_reasoning_effort(litellm: Any, model: str) -> bool:
     setting reaches a FRONTIER reasoning model and a FAST one that has no such parameter. LiteLLM
     does not ignore a parameter a model does not support: ``litellm.drop_params`` is False unless
     the deployment sets ``LITELLM_DROP_PARAMS``, so it raises ``UnsupportedParamsError`` — a
-    ``BadRequestError``, which this module reports as ``LLMCallError``, which ``routed_model``
-    turns into a ``ModelRetry``. Sending it blindly would therefore burn a whole agent's retry
-    budget on every FAST-tier call and surface as a model failure rather than a misconfiguration.
+    ``BadRequestError``, which this module reports as ``LLMCallError``. The agent now stops
+    with a provider-error diagnosis instead of retrying an unchanged invalid request. Avoiding
+    the unsupported parameter here still prevents that unnecessary failure on FAST-tier calls.
 
     An unknown model id yields ``None`` rather than an error, and is treated as *not* accepting
     it: a tuning knob must never be the reason a Run fails. Whether it was actually applied is
@@ -141,6 +143,23 @@ def _accepts_reasoning_effort(litellm: Any, model: str) -> bool:
     except Exception:  # noqa: BLE001  # an unresolvable model must not fail provider construction
         return False
     return bool(supported) and "reasoning_effort" in supported
+
+
+def _output_limit_parameter(litellm: Any, model: str) -> str:
+    """Choose a supported LiteLLM output cap, preferring the completion-wide limit."""
+    try:
+        supported = litellm.utils.get_supported_openai_params(model=model)
+    except Exception as exc:  # unknown capabilities must fail before dispatch
+        raise LLMConfigurationError(
+            f"LiteLLM cannot verify output-limit support for model {model!r}"
+        ) from exc
+    if supported and "max_completion_tokens" in supported:
+        return "max_completion_tokens"
+    if supported and "max_tokens" in supported:
+        return "max_tokens"
+    raise LLMConfigurationError(
+        f"model {model!r} does not expose a supported output-token limit through LiteLLM"
+    )
 
 
 class _UnraisedGatewayError(Exception):
@@ -207,6 +226,62 @@ def _provider_label(model: str) -> str:
     return model.split("/", 1)[0] if "/" in model else "openai"
 
 
+def estimate_text_tokens(model: str, text: str) -> int:
+    """Estimate local tokenizer cost for one text surface through the installed LiteLLM SDK.
+
+    This is a local model-tokenizer estimate. It cannot prove how a remote provider serializes
+    messages or transforms a response schema, so callers must add an explicit margin.
+    """
+    try:
+        import litellm  # noqa: PLC0415  # preserve the provider's lazy SDK import
+
+        result = litellm.token_counter(model=model, text=text)
+    except Exception as exc:  # SDK tokenizer errors mean no credible estimate
+        raise LLMConfigurationError(
+            f"LiteLLM cannot estimate local tokens for model {model!r}"
+        ) from exc
+    if not isinstance(result, int) or isinstance(result, bool) or result < 0:
+        raise LLMConfigurationError(f"LiteLLM returned an invalid token estimate for {model!r}")
+    return result
+
+
+def estimate_structured_input_tokens(
+    model: str,
+    prompt: str,
+    system: str,
+    schema: type[BaseModelT],
+) -> int:
+    """Estimate actual messages plus the locally serialized structured-output schema.
+
+    LiteLLM's counter covers message framing and text. The structured schema is counted as a
+    separate local JSON surface because the public tokenizer API does not accept
+    ``response_format``.
+    Remote serialization can differ; callers must keep a margin and treat this as an estimate.
+    """
+    try:
+        import litellm  # noqa: PLC0415  # preserve the provider's lazy SDK import
+
+        messages: list[dict[str, str]] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        message_tokens = litellm.token_counter(model=model, messages=messages)
+        schema_text = json.dumps(
+            schema.model_json_schema(), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+        schema_tokens = litellm.token_counter(model=model, text=schema_text)
+    except Exception as exc:  # fail closed when local tokenizer cannot project
+        raise LLMConfigurationError(
+            f"LiteLLM cannot estimate the structured input for model {model!r}"
+        ) from exc
+    if any(
+        not isinstance(value, int) or isinstance(value, bool) or value < 0
+        for value in (message_tokens, schema_tokens)
+    ):
+        raise LLMConfigurationError(f"LiteLLM returned an invalid token estimate for {model!r}")
+    return message_tokens + schema_tokens
+
+
 class LiteLLMProvider:
     """The single production implementation of :class:`LLMProvider`, backed by LiteLLM."""
 
@@ -216,7 +291,7 @@ class LiteLLMProvider:
         self,
         *,
         model: str | None = None,
-        request_ledger: RequestLedger | None = None,
+        request_ledger: EvidenceLedger | None = None,
         request_owner_id: str | None = None,
         proxy_endpoint: str | None = None,
         declared_safe_endpoints: Collection[str] = (),
@@ -269,7 +344,7 @@ class LiteLLMProvider:
         self._previous_request_id: str | None = None
         self._runtime_skill_evidence: Mapping[str, object] | None = None
 
-    def attach_request_ledger(self, ledger: RequestLedger, *, owner_id: str) -> None:
+    def attach_request_ledger(self, ledger: EvidenceLedger, *, owner_id: str) -> None:
         """Attach the Run's request ledger before the next effective gateway call."""
         if not owner_id.strip():
             raise ValueError("request ledger owner_id must not be empty")
@@ -389,6 +464,34 @@ class LiteLLMProvider:
                 )
             )
         return tuple(parsed)
+
+    @classmethod
+    def _usage_is_reported(cls, response: Any) -> bool:
+        """Whether LiteLLM received both inclusive totals from the provider response."""
+        usage = cls._field(response, "usage")
+        counts = (
+            cls._field(usage, "prompt_tokens"),
+            cls._field(usage, "completion_tokens"),
+        )
+        return all(
+            isinstance(value, int) and not isinstance(value, bool) and value >= 0
+            for value in counts
+        )
+
+    @classmethod
+    def _usage_metadata(cls, response: Any) -> dict[str, Any]:
+        """Expose missing usage distinctly from a provider-reported zero."""
+        usage = cls._usage(response)
+        subsets_consistent = (
+            usage.cached_input_tokens <= usage.input_tokens
+            and usage.reasoning_output_tokens <= usage.output_tokens
+        )
+        reported = cls._usage_is_reported(response) and subsets_consistent
+        return {
+            "usage_known": reported,
+            "usage_source": "provider_reported" if reported else "unknown",
+            "usage_subsets_consistent": subsets_consistent,
+        }
 
     def _effort_metadata(self) -> dict[str, Any]:
         """What this provider did with the configured effort, for the response record.
@@ -525,39 +628,49 @@ class LiteLLMProvider:
             raise
         except errors.Timeout as exc:
             self._record_failure(lease, ResponseOutcome.TIMEOUT, "provider_timeout", exc)
-            raise LLMTimeoutError(f"the LLM provider timed out ({self.provider_name})") from exc
+            raise LLMTimeoutError(
+                f"the LLM provider timed out ({self.provider_name})",
+                provider_diagnostics=extract_provider_diagnostics(exc),
+            ) from None
         except (
             errors.AuthenticationError,
             errors.PermissionDeniedError,
         ) as exc:
             self._record_failure(lease, ResponseOutcome.PROVIDER_ERROR, "provider_error", exc)
             raise LLMCallError(
-                f"authentication failed with the LLM provider ({self.provider_name})"
-            ) from exc
+                f"authentication failed with the LLM provider ({self.provider_name})",
+                provider_diagnostics=extract_provider_diagnostics(exc),
+            ) from None
         except errors.RateLimitError as exc:
             self._record_failure(lease, ResponseOutcome.PROVIDER_ERROR, "provider_error", exc)
             raise LLMCallError(
-                f"rate limit reached on the LLM provider ({self.provider_name})"
-            ) from exc
+                f"rate limit reached on the LLM provider ({self.provider_name})",
+                provider_diagnostics=extract_provider_diagnostics(exc),
+            ) from None
         except (
             errors.APIConnectionError,
             errors.ServiceUnavailableError,
         ) as exc:
             self._record_failure(lease, ResponseOutcome.PROVIDER_ERROR, "provider_error", exc)
             raise LLMCallError(
-                f"network error contacting the LLM provider ({self.provider_name})"
-            ) from exc
+                f"network error contacting the LLM provider ({self.provider_name})",
+                provider_diagnostics=extract_provider_diagnostics(exc),
+            ) from None
         except (
             errors.BadRequestError,
             errors.NotFoundError,
         ) as exc:
             self._record_failure(lease, ResponseOutcome.PROVIDER_ERROR, "provider_error", exc)
             raise LLMCallError(
-                f"invalid request to the LLM provider ({self.provider_name})"
-            ) from exc
-        except Exception as exc:  # safety net: LiteLLM has no single common base
+                f"invalid request to the LLM provider ({self.provider_name})",
+                provider_diagnostics=extract_provider_diagnostics(exc),
+            ) from None
+        except Exception as exc:  # noqa: BLE001  # LiteLLM has no common base; hide remote bodies
             self._record_failure(lease, ResponseOutcome.PROVIDER_ERROR, "provider_error", exc)
-            raise LLMCallError(f"call to the LLM provider failed ({self.provider_name})") from exc
+            raise LLMCallError(
+                f"call to the LLM provider failed ({self.provider_name})",
+                provider_diagnostics=extract_provider_diagnostics(exc),
+            ) from None
         except BaseException as exc:  # preserve durable evidence for opaque aborts
             self._record_failure(lease, ResponseOutcome.UNKNOWN, "provider_unknown", exc)
             raise
@@ -591,11 +704,19 @@ class LiteLLMProvider:
                 cached_input_tokens=usage.cached_input_tokens,
                 reasoning_output_tokens=usage.reasoning_output_tokens,
                 cost_usd=cost,
-                metadata={"integration": "litellm", "api": "completion.tools"},
+                metadata={
+                    "integration": "litellm",
+                    "api": "completion.tools",
+                    **self._usage_metadata(response),
+                },
                 reasoning=self._reasoning_metadata(response, usage),
             )
             self._record_response_failure(lease, failure, "tool_call_parse_failure", exc)
-            raise
+            raise LLMStructuredOutputError(
+                "the model returned malformed tool-call arguments; provide valid JSON object "
+                "arguments for the requested tools",
+                response=failure,
+            ) from None
         result = LLMResponse(
             text=response.choices[0].message.content or "",
             provider=self.provider_name,
@@ -612,6 +733,7 @@ class LiteLLMProvider:
                 "response_id": getattr(response, "id", None),
                 **cost_metadata,
                 **self._effort_metadata(),
+                **self._usage_metadata(response),
             },
             tool_calls=tool_calls,
             reasoning=self._reasoning_metadata(response, usage),
@@ -681,6 +803,7 @@ class LiteLLMProvider:
                 "response_id": getattr(response, "id", None),
                 **cost_metadata,
                 **self._effort_metadata(),
+                **self._usage_metadata(response),
             },
             reasoning=self._reasoning_metadata(response, usage),
         )
@@ -695,6 +818,7 @@ class LiteLLMProvider:
         *,
         schema: type[BaseModelT],
         system: str = "",
+        max_output_tokens: int | None = None,
     ) -> tuple[BaseModelT, LLMResponse]:
         """Request a Pydantic-validated output via ``response_format``.
 
@@ -714,8 +838,14 @@ class LiteLLMProvider:
             raise LLMStructuredOutputError(
                 f"the model '{self.model}' does not support structured output in LiteLLM"
             )
+        output_limit: dict[str, int] = {}
+        if max_output_tokens is not None:
+            if max_output_tokens < 1:
+                raise ValueError("max_output_tokens must be positive")
+            limit_parameter = _output_limit_parameter(litellm, self.model)
+            output_limit[limit_parameter] = max_output_tokens
         messages = self._build_messages(prompt, system)
-        response, lease = self._call(messages, response_format=schema)
+        response, lease = self._call(messages, response_format=schema, **output_limit)
         content = response.choices[0].message.content
         usage = self._usage(response)
         cost, cost_metadata = self._cost(response)
@@ -736,6 +866,7 @@ class LiteLLMProvider:
                 "schema": schema.__name__,
                 **cost_metadata,
                 **self._effort_metadata(),
+                **self._usage_metadata(response),
             },
             reasoning=self._reasoning_metadata(response, usage),
         )
@@ -749,9 +880,14 @@ class LiteLLMProvider:
         try:
             validated = schema.model_validate(raw)
         except ValidationError as exc:
+            print("TEMP-DEBUG raw model JSON:", content, flush=True)  # TEMP-DEBUG  # noqa: T201
+            print(
+                "TEMP-DEBUG pydantic errors:", exc.errors(include_input=False), flush=True
+            )  # TEMP-DEBUG  # noqa: T201
             self._record_response_failure(lease, failure, "structured_parse_failure", exc)
             raise LLMStructuredOutputError(
-                f"the response does not satisfy the expected schema {schema.__name__}",
+                f"the response does not satisfy the expected schema {schema.__name__}. "
+                + validation_feedback(exc, schema),
                 response=failure,
             ) from None
 
@@ -772,6 +908,7 @@ class LiteLLMProvider:
                 "schema": schema.__name__,
                 **cost_metadata,
                 **self._effort_metadata(),
+                **self._usage_metadata(response),
             },
             reasoning=self._reasoning_metadata(response, usage),
         )
@@ -779,3 +916,19 @@ class LiteLLMProvider:
         if lease is not None and ledger is not None:
             ledger.record_response(lease, llm_response)
         return validated, llm_response
+
+    def complete_structured_bounded(
+        self,
+        prompt: str,
+        *,
+        schema: type[BaseModelT],
+        system: str = "",
+        max_output_tokens: int,
+    ) -> tuple[BaseModelT, LLMResponse]:
+        """Request structured output with a provider-confirmed completion token ceiling."""
+        return self.complete_structured(
+            prompt,
+            schema=schema,
+            system=system,
+            max_output_tokens=max_output_tokens,
+        )

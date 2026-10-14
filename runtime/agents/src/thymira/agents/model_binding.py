@@ -19,7 +19,6 @@ from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
     RetryPromptPart,
-    SystemPromptPart,
     TextPart,
     ToolCallPart,
     ToolReturnPart,
@@ -39,9 +38,12 @@ from thymira.agents.llm.base import (
 from thymira.agents.llm.litellm_provider import LiteLLMProvider
 from thymira.agents.llm.proxy import resolve_proxy_endpoint
 from thymira.agents.llm.routing import ModelChoice, ModelTier, Role, choose
+from thymira.agents.llm.validation_feedback import validation_feedback
 from thymira.agents.prompt_provenance import PromptProvenanceContext, record_prompt
 from thymira.agents.request_ledger import RequestLedger, instrument_provider
 from thymira.agents.route_policy import enforce_model_route
+from thymira.agents.structured_prompt import structured_prompt as _extract_prompt_and_system
+from thymira.agents.structured_prompt import system_text as _system_text
 from thymira.events import current_surface, scrub_credentials, scrub_credentials_value
 from thymira.observability import generation, is_enabled, update_current_generation
 from thymira.schemas import Actor, EventType
@@ -60,63 +62,6 @@ if TYPE_CHECKING:
     from thymira.observability import Handle
     from thymira.schemas import ModelRoutePolicy
     from thymira.state import ArtifactStore
-
-
-def _effective_instructions(messages: list[ModelMessage]) -> str:
-    """Return the current request's ``ModelRequest.instructions`` (PydanticAI's ``instructions=``).
-
-    PydanticAI attaches the rendered instructions to `ModelRequest.instructions` (a ``str | None``,
-    confirmed against pydantic_ai 2.33.0) and emits no part for them. Every ``ModelRequest`` in a
-    run carries the same rendered instructions, so the most recent one is taken and emitted once,
-    rather than repeated per request across a multi-turn tool history. Returns ``""`` when no
-    request set instructions (a caller using ``system_prompt=`` only, or neither).
-    """
-    for message in reversed(messages):
-        if isinstance(message, ModelRequest) and message.instructions is not None:
-            return message.instructions
-    return ""
-
-
-def _system_text(messages: list[ModelMessage]) -> str:
-    """Combine PydanticAI's two system-level channels into the provider's single ``system`` string.
-
-    PydanticAI carries system-level content two ways: ``system_prompt=`` becomes a
-    `SystemPromptPart`, while ``instructions=`` becomes `ModelRequest.instructions` and emits no
-    part. Every call site in this repo builds its agent with ``instructions=``, so honouring only
-    `SystemPromptPart` dropped the whole behavioural contract of every `AgentSpec`. Both channels
-    are collected here.
-
-    When a caller supplies BOTH, both are kept — each is genuine system content the model must see,
-    and dropping either would lose part of the contract — with the `SystemPromptPart` text first and
-    the ``instructions`` string last, newline-joined. Returns ``""`` when neither is present.
-    """
-    system_parts: list[str] = [
-        str(part.content)
-        for message in messages
-        if isinstance(message, ModelRequest)
-        for part in message.parts
-        if isinstance(part, SystemPromptPart)
-    ]
-    if instructions := _effective_instructions(messages):
-        system_parts.append(instructions)
-    return "\n".join(system_parts)
-
-
-def _extract_prompt_and_system(messages: list[ModelMessage]) -> tuple[str, str]:
-    """Flatten PydanticAI's message history into ``(prompt, system)``.
-
-    THY-02's scope is one routed request, not multi-turn history management — THY-03's
-    `AgentRunner` owns the conversation shape. Concatenating user text and combining the two
-    system-level channels (:func:`_system_text`) is enough for a single-turn call.
-    """
-    prompt_parts = [
-        part.content
-        for message in messages
-        if isinstance(message, ModelRequest)
-        for part in message.parts
-        if isinstance(part, UserPromptPart) and isinstance(part.content, str)
-    ]
-    return scrub_credentials("\n".join(prompt_parts)), scrub_credentials(_system_text(messages))
 
 
 def _request_part_for_provider(part: object) -> LLMMessage | None:
@@ -362,11 +307,27 @@ def _tool_turn_response(
             tools=_tool_definitions(info),
             parallel_tool_calls=parallel_tool_calls,
         )
+    except LLMStructuredOutputError as exc:
+        if exc.response is None:
+            if reservation is not None:
+                reservation.cancel()
+            observation.update(
+                failed=True, reason="provider rejected the request before a response"
+            )
+            raise LLMCallError(
+                "the provider rejected the request before returning a response"
+            ) from None
+        _settle_model_response(exc.response, usage, reservation, record_model_usage)
+        observation.update(failed=True, reason="the model returned malformed tool-call arguments")
+        raise ModelRetry(
+            "The model returned malformed tool-call arguments. Return valid JSON object "
+            "arguments for the requested tools."
+        ) from None
     except LLMCallError as exc:
         if reservation is not None:
             reservation.cancel()
         observation.update(failed=True, reason=str(exc))
-        raise ModelRetry(str(exc)) from exc
+        raise
     except BaseException:
         if reservation is not None:
             reservation.cancel()
@@ -396,9 +357,10 @@ def _tool_turn_response(
         if call.name in output_tool_names and output_schema is not None:
             try:
                 args = output_schema.model_validate(args).model_dump(mode="json")
-            except ValidationError:
+            except ValidationError as exc:
                 raise ModelRetry(
-                    f"the model returned invalid {output_schema.__name__} output"
+                    f"the model returned invalid {output_schema.__name__} output\n\n"
+                    f"{validation_feedback(exc, output_schema)}"
                 ) from None
         parts.append(ToolCallPart(tool_name=call.name, args=args, tool_call_id=call.id))
     if not parts and response.text:
@@ -471,10 +433,10 @@ def routed_model(  # noqa: PLR0915  # merges routing, provenance, proxy-boundary
         output_schema: When set without callable tools, the provider uses
             `LLMProvider.complete_structured`; with callable tools, the schema is exposed as
             PydanticAI's output tool (`AgentInfo.output_tools`) in `complete_turn`. Both paths
-            validate locally before returning the output tool call. An invalid or failed
-            completion is raised as `ModelRetry` so PydanticAI's retry loop — bounded by the
-            `Agent(retries=...)` the caller sets from `spec.max_turns` — drives the next attempt,
-            rather than aborting the run.
+            validate returned content locally before returning it. Invalid returned structured
+            content uses `ModelRetry` and bounded schema feedback, within the
+            `Agent(retries=...)` limit derived from `spec.max_turns`. Provider, configuration and
+            pre-dispatch capability failures terminate instead of entering that repair loop.
         assembled: The step's `AssembledPrompt` (THY-05). Given together with `artifact_store`
             and `agent_id`, every call records prompt provenance (THY-06) instead of the plain
             `model.selected` append below.
@@ -661,14 +623,22 @@ def routed_model(  # noqa: PLR0915  # merges routing, provenance, proxy-boundary
                         prompt, schema=output_schema, system=system
                     )
                 except LLMStructuredOutputError as exc:
-                    observation.update(failed=True, reason=str(exc))
                     # Local schema validation happens after a provider has already answered and
                     # billed the request. Charge that received response before PydanticAI retries;
                     # pre-call structured-output failures carry no response and remain uncharged.
                     if exc.response is not None:
                         _settle_model_response(exc.response, usage, reservation, record_model_usage)
-                    elif reservation is not None:
-                        reservation.cancel()
+                        observation.update(failed=True, reason=str(exc))
+                    else:
+                        if reservation is not None:
+                            reservation.cancel()
+                        observation.update(
+                            failed=True,
+                            reason="structured output is unsupported before provider dispatch",
+                        )
+                        raise LLMCallError(
+                            "structured output is unsupported before provider dispatch"
+                        ) from None
                     # A provider's validation cause may contain its raw response (Pydantic's
                     # ``input_value`` is one example). Preserve the safe boundary message while
                     # suppressing the untrusted exception chain from observable tracebacks.
@@ -677,7 +647,7 @@ def routed_model(  # noqa: PLR0915  # merges routing, provenance, proxy-boundary
                     if reservation is not None:
                         reservation.cancel()
                     observation.update(failed=True, reason=str(exc))
-                    raise ModelRetry(str(exc)) from exc
+                    raise
                 except BaseException:
                     if reservation is not None:
                         reservation.cancel()

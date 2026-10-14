@@ -510,7 +510,7 @@ def test_declared_context_reaches_the_prompt_as_one_framed_block_per_field() -> 
     assert "Outputs inform later research only." in prompt
     assert "profile-human_oversight" in prompt
     assert "profile-autonomy" not in prompt
-    assert "risk-classifier-v2" in prompt
+    assert "risk-classifier-v3" in prompt
 
 
 def test_declared_context_is_capped_before_framing() -> None:

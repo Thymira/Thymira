@@ -59,7 +59,15 @@ class LLMConfigurationError(RuntimeError):
 
 
 class LLMCallError(RuntimeError):
-    """The remote call failed (authentication, rate limit, network, or an invalid request)."""
+    """The remote call failed (authentication, rate limit, network, or an invalid request).
+
+    ``provider_diagnostics`` carries only adapter-extracted safe fields. It is revalidated by the
+    terminal failure consumer and never contains the provider's body or message.
+    """
+
+    def __init__(self, message: str, *, provider_diagnostics: object | None = None) -> None:
+        super().__init__(message)
+        self.provider_diagnostics = provider_diagnostics
 
 
 class LLMTimeoutError(LLMCallError):

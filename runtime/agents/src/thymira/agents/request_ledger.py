@@ -14,20 +14,22 @@ import json
 import re
 import threading
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Generic, cast
 
 from pydantic import BaseModel
 
 from thymira.agents.llm.base import (
     LLMCallError,
+    LLMConfigurationError,
     LLMStructuredOutputError,
     LLMTimeoutError,
 )
+from thymira.agents.request_evidence import LogT_co, RequestLease
 from thymira.events import canonical_json, sha256_text
+from thymira.events.provider_evidence import ProviderEvidence as Event
+from thymira.events.provider_evidence import ProviderEvidenceLog
 from thymira.schemas import (
     Actor,
-    Event,
     EventType,
     ProviderGatewayRequest,
     ProviderMessage,
@@ -54,7 +56,6 @@ if TYPE_CHECKING:
         LLMResponse,
         LLMToolDefinition,
     )
-    from thymira.events import EventLog
 
 _OWNER_FACTS = ("model", "system", "settings", "tools", "output_schema", "messages")
 _HEADER_DIGEST = "header_sha256"
@@ -83,14 +84,6 @@ def _failure_kind(error: BaseException) -> tuple[ResponseOutcome, str]:
     if isinstance(error, LLMCallError):
         return ResponseOutcome.PROVIDER_ERROR, "provider_error"
     return ResponseOutcome.UNKNOWN, "provider_unknown"
-
-
-@dataclass(frozen=True, slots=True)
-class RequestLease:
-    """The durable request identity returned immediately before provider dispatch."""
-
-    request: ProviderRequest
-    event: Event
 
 
 def _json_value(value: object, *, path: str = "value") -> Any:
@@ -273,10 +266,10 @@ def _reasoning(response: LLMResponse) -> ReasoningMetadata:
     return ReasoningMetadata(status=status, token_count=provider_token_count, digest=digest)
 
 
-class RequestLedger:
-    """Append request and response evidence for one event-log-backed Run."""
+class RequestLedger(Generic[LogT_co]):  # noqa: UP046  # default type arguments on Python 3.12
+    """Append request and response evidence for one Run or Session evidence scope."""
 
-    def __init__(self, event_log: EventLog, *, actor: Actor | None = None) -> None:
+    def __init__(self, event_log: LogT_co, *, actor: Actor | None = None) -> None:
         """Create a ledger over the supplied authoritative event log."""
         self.event_log = event_log
         self.actor = actor or Actor.system()
@@ -678,6 +671,9 @@ class RequestLedger:
         )
 
 
+EvidenceLedger = RequestLedger[ProviderEvidenceLog]
+
+
 class LedgerProvider:
     """Provider adapter for non-LiteLLM implementations such as ``ScriptedProvider``.
 
@@ -686,7 +682,7 @@ class LedgerProvider:
     to observe settings that an unknown provider may add internally.
     """
 
-    def __init__(self, provider: LLMProvider, ledger: RequestLedger, *, owner_id: str) -> None:
+    def __init__(self, provider: LLMProvider, ledger: EvidenceLedger, *, owner_id: str) -> None:
         """Create a recording adapter around one provider."""
         if not owner_id.strip():
             raise ValueError("request ledger owner_id must not be empty")
@@ -712,7 +708,7 @@ class LedgerProvider:
         return self._provider.model
 
     @property
-    def ledger(self) -> RequestLedger:
+    def ledger(self) -> RequestLedger[ProviderEvidenceLog]:
         """Return the durable ledger this adapter writes to."""
         return self._ledger
 
@@ -866,15 +862,65 @@ class LedgerProvider:
         system: str = "",
     ) -> tuple[BaseModelT, LLMResponse]:
         """Record and execute one structured provider call."""
+        return self._complete_structured(prompt, schema=schema, system=system)
+
+    def complete_structured_bounded(
+        self,
+        prompt: str,
+        *,
+        schema: type[BaseModelT],
+        system: str = "",
+        max_output_tokens: int,
+    ) -> tuple[BaseModelT, LLMResponse]:
+        """Record and execute only when the wrapped provider exposes an output cap."""
+        if max_output_tokens < 1:
+            raise ValueError("max_output_tokens must be positive")
+        bounded = getattr(self._provider, "complete_structured_bounded", None)
+        if not callable(bounded):
+            raise LLMConfigurationError(
+                "the configured provider cannot enforce a structured output-token limit"
+            )
+        return self._complete_structured(
+            prompt,
+            schema=schema,
+            system=system,
+            max_output_tokens=max_output_tokens,
+        )
+
+    def _complete_structured(
+        self,
+        prompt: str,
+        *,
+        schema: type[BaseModelT],
+        system: str,
+        max_output_tokens: int | None = None,
+    ) -> tuple[BaseModelT, LLMResponse]:
+        """Persist the exact bounded call surface and settle its terminal response."""
         messages: list[dict[str, Any]] = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
-        lease = self._record(messages, {"response_format": schema})
+        settings: dict[str, Any] = {"response_format": schema}
+        if max_output_tokens is not None:
+            settings["max_output_tokens"] = max_output_tokens
+        lease = self._record(messages, settings)
         try:
-            parsed, response = self._provider.complete_structured(
-                prompt, schema=schema, system=system
-            )
+            if max_output_tokens is None:
+                parsed, response = self._provider.complete_structured(
+                    prompt, schema=schema, system=system
+                )
+            else:
+                bounded = getattr(self._provider, "complete_structured_bounded", None)
+                if not callable(bounded):
+                    raise LLMConfigurationError(  # noqa: TRY301  # fail closed before dispatch
+                        "the configured provider cannot enforce a structured output-token limit"
+                    )
+                parsed, response = bounded(
+                    prompt,
+                    schema=schema,
+                    system=system,
+                    max_output_tokens=max_output_tokens,
+                )
         except asyncio.CancelledError as exc:
             self._record_failure(lease, exc)
             raise
@@ -893,7 +939,7 @@ class LedgerProvider:
 
 def instrument_provider(
     provider: LLMProvider,
-    ledger: RequestLedger,
+    ledger: RequestLedger[ProviderEvidenceLog],
     *,
     owner_id: str,
 ) -> LLMProvider:

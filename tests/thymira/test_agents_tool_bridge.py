@@ -2,16 +2,27 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from dataclasses import replace
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from pydantic_ai import Agent as PydanticAgent
 from pydantic_ai import Tool as PydanticTool
-from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart
+from pydantic_ai.messages import (
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+)
 from pydantic_ai.models.function import FunctionModel
 
 from tests.thymira.fixtures_agent_output import DataProfileOutput
-from tests.thymira.fixtures_tools import EchoArguments, FakeTool, review_gated_context
+from tests.thymira.fixtures_tools import (
+    EchoArguments,
+    FakeTool,
+    review_gated_context,
+)
 from thymira.agents import (
     AgentCatalog,
     AgentContext,
@@ -22,12 +33,16 @@ from thymira.agents import (
     ScriptedProvider,
     build_agent_tools,
 )
+from thymira.agents.history import TOOL_RETURN_SUCCESS_METADATA_KEY
 from thymira.agents.llm.routing import Role
+from thymira.agents.resume import ResumeStatus, load_pending_resume
 from thymira.agents.tool_bridge import (
     DENIED_MARKER,
     TRACE_OUTPUT_LIMIT,
     _bounded,
+    invalid_python_source_counts,
     render_tool_output,
+    repeated_invalid_python_source_reason,
 )
 from thymira.events import InMemoryEventLog
 from thymira.policies import (
@@ -39,6 +54,8 @@ from thymira.policies import (
     load_policy_stack,
 )
 from thymira.schemas import (
+    Actor,
+    ActorKind,
     EventType,
     ModelRoutePolicy,
     Task,
@@ -49,7 +66,17 @@ from thymira.schemas import (
 )
 from thymira.state import LocalArtifactStore
 from thymira.thy.agents.coding import CodeResult
-from thymira.tools import LegacyToolValue, ToolContext, ToolExecution, ToolRegistry, ToolResult
+from thymira.tools import (
+    LegacyToolValue,
+    Tool,
+    ToolContext,
+    ToolExecution,
+    ToolRegistry,
+    ToolResult,
+)
+from thymira.tools.approval_ticket import tool_intent_sha256
+from thymira.tools.builtins.files import WriteFile
+from thymira.tools.builtins.run_python import RunPython, RunPythonArguments
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -407,6 +434,641 @@ def test_agent_runner_stops_tool_turns_at_max_turns(tmp_path: Path) -> None:
     assert result.output is None
     assert len(provider.calls) == 2
     assert len(echo.seen_invocation) == 2
+
+
+def test_agent_runner_stops_before_a_third_request_for_the_same_invalid_python(
+    tmp_path: Path,
+) -> None:
+    run_id = new_id("run")
+    task = Task(
+        id=new_id("task"),
+        run_id=run_id,
+        agent_id=new_id("agent"),
+        objective="Run the analysis.",
+    )
+    source = "print('before')\\nprint('after')"
+    tool_context = _tool_context(tmp_path, run_id=run_id)
+    spec = AgentSpec(
+        name="coding",
+        role=Role.AGENT,
+        task_kinds=("code",),
+        tool_allowlist=("run_python",),
+        max_turns=4,
+        max_depth=1,
+        system_prompt_ref="prompts/coding.md",
+        output_schema_ref="tests.thymira.fixtures_agent_output:DataProfileOutput",
+    )
+    provider = ScriptedProvider(
+        [
+            LLMToolCall(
+                id="call-1",
+                name="run_python",
+                arguments={"code": source, "description": "test invalid syntax"},
+            ),
+            LLMToolCall(
+                id="call-2",
+                name="run_python",
+                arguments={"code": source, "description": "test invalid syntax"},
+            ),
+            LLMToolCall(
+                id="call-3",
+                name="final_result",
+                arguments={"row_count": 1, "columns": ["value"]},
+            ),
+        ]
+    )
+
+    result = AgentRunner().run(
+        spec,
+        task,
+        AgentContext(
+            route_policy=TEST_ROUTE_POLICY,
+            catalog=_coding_catalog(spec),
+            event_log=tool_context.event_log,
+            provider=provider,
+            tool_registry=ToolRegistry((cast("Tool", RunPython()),)),
+            tool_context=tool_context,
+        ),
+    )
+
+    assert result.task_status is TaskStatus.FAILED
+    assert len(provider.calls) == 2
+    assert not any(
+        event.type in (EventType.TOOL_STARTED, EventType.POLICY_DECISION)
+        for event in tool_context.event_log.events()
+    )
+    completed = next(
+        event
+        for event in reversed(tool_context.event_log.events())
+        if event.type is EventType.AGENT_COMPLETED
+    )
+    assert "same syntactically invalid source twice" in completed.payload["reason"]
+
+
+def test_agent_runner_stops_before_a_third_request_for_the_same_invalid_registered_write(
+    tmp_path: Path,
+) -> None:
+    run_id = new_id("run")
+    task = Task(
+        id=new_id("task"),
+        run_id=run_id,
+        agent_id=new_id("agent"),
+        objective="Prepare the registered Python source.",
+    )
+    tool_context = _tool_context(tmp_path, run_id=run_id)
+    spec = AgentSpec(
+        name="coding",
+        role=Role.AGENT,
+        task_kinds=("code",),
+        tool_allowlist=("write_file",),
+        max_turns=4,
+        max_depth=1,
+        system_prompt_ref="prompts/coding.md",
+        output_schema_ref="tests.thymira.fixtures_agent_output:DataProfileOutput",
+    )
+    invalid_source = "x = 1\\ny = 2"
+    provider = ScriptedProvider(
+        [
+            LLMToolCall(
+                id=f"invalid-{attempt}",
+                name="write_file",
+                arguments={
+                    "path": "analysis.py",
+                    "content": invalid_source,
+                    "kind": "code",
+                    "description": "Register the Python source.",
+                },
+            )
+            for attempt in (1, 2)
+        ]
+        + [
+            LLMToolCall(
+                id="final",
+                name="final_result",
+                arguments={"row_count": 1, "columns": ["value"]},
+            )
+        ]
+    )
+
+    result = AgentRunner().run(
+        spec,
+        task,
+        AgentContext(
+            route_policy=TEST_ROUTE_POLICY,
+            catalog=_coding_catalog(spec),
+            event_log=tool_context.event_log,
+            provider=provider,
+            tool_registry=ToolRegistry((cast("Tool", WriteFile()),)),
+            tool_context=tool_context,
+        ),
+    )
+
+    events = tool_context.event_log.events()
+    assert result.task_status is TaskStatus.FAILED
+    assert len(provider.calls) == 2
+    assert not any(
+        event.type in (EventType.TOOL_STARTED, EventType.POLICY_DECISION, EventType.HUMAN_APPROVAL)
+        for event in events
+    )
+    failures = [
+        event
+        for event in events
+        if event.type is EventType.TOOL_COMPLETED and event.payload.get("tool") == "write_file"
+    ]
+    assert len(failures) == 2
+    assert all(event.payload.get("exit_code") is None for event in failures)
+
+
+def test_corrected_registered_write_requires_its_own_exact_approval(tmp_path: Path) -> None:
+    run_id = new_id("run")
+    tool_context = review_gated_context(tmp_path, run_id=run_id)
+    task = Task(
+        id=new_id("task"),
+        run_id=run_id,
+        agent_id=tool_context.agent_id,
+        objective="Prepare the registered Python source.",
+    )
+    spec = AgentSpec(
+        name="coding",
+        role=Role.AGENT,
+        task_kinds=("code",),
+        tool_allowlist=("write_file",),
+        max_turns=4,
+        max_depth=1,
+        system_prompt_ref="prompts/coding.md",
+        output_schema_ref="tests.thymira.fixtures_agent_output:DataProfileOutput",
+    )
+    repaired_arguments = {
+        "path": "analysis.py",
+        "content": "print('repaired')",
+        "kind": "code",
+        "description": "Register the corrected Python source.",
+    }
+    provider = ScriptedProvider(
+        [
+            LLMToolCall(
+                id="invalid-source",
+                name="write_file",
+                arguments={
+                    **repaired_arguments,
+                    "content": "x = 1\\ny = 2",
+                    "description": "Register the invalid Python source.",
+                },
+            ),
+            LLMToolCall(
+                id="corrected-source",
+                name="write_file",
+                arguments=repaired_arguments,
+            ),
+        ]
+    )
+
+    result = AgentRunner().run(
+        spec,
+        task,
+        AgentContext(
+            route_policy=TEST_ROUTE_POLICY,
+            catalog=_coding_catalog(spec),
+            event_log=tool_context.event_log,
+            provider=provider,
+            tool_registry=ToolRegistry((cast("Tool", WriteFile()),)),
+            tool_context=tool_context,
+        ),
+    )
+
+    events = tool_context.event_log.events()
+    requests = [event for event in events if event.type is EventType.HUMAN_APPROVAL_REQUESTED]
+    denied = [
+        event
+        for event in events
+        if event.type is EventType.TOOL_DENIED and event.payload.get("tool") == "write_file"
+    ]
+    assert result.task_status is TaskStatus.PENDING
+    assert len(provider.calls) == 2
+    assert len(requests) == len(denied) == 1
+    assert isinstance(denied[0].payload["tool_call_id"], str)
+    assert denied[0].payload["arguments"] == repaired_arguments
+    assert denied[0].payload["tool_intent_sha256"] == tool_intent_sha256(
+        "write_file", repaired_arguments
+    )
+    assert not any(event.type is EventType.TOOL_STARTED for event in events)
+    assert not any(event.type is EventType.HUMAN_APPROVAL for event in events)
+
+
+def test_missing_description_preflight_is_not_counted_as_python_syntax_failure(
+    tmp_path: Path,
+) -> None:
+    run_id = new_id("run")
+    task = Task(
+        id=new_id("task"),
+        run_id=run_id,
+        agent_id=new_id("agent"),
+        objective="Prepare the registered Python source.",
+    )
+    tool_context = _tool_context(tmp_path, run_id=run_id)
+    spec = AgentSpec(
+        name="coding",
+        role=Role.AGENT,
+        task_kinds=("code",),
+        tool_allowlist=("write_file",),
+        max_turns=4,
+        max_depth=1,
+        system_prompt_ref="prompts/coding.md",
+        output_schema_ref="tests.thymira.fixtures_agent_output:DataProfileOutput",
+    )
+    invalid_arguments = {"path": "analysis.py", "content": "x = 1\\ny = 2", "kind": "code"}
+    provider = ScriptedProvider(
+        [
+            LLMToolCall(
+                id=f"missing-description-{attempt}",
+                name="write_file",
+                arguments=invalid_arguments,
+            )
+            for attempt in (1, 2)
+        ]
+        + [
+            LLMToolCall(
+                id="final",
+                name="final_result",
+                arguments={"row_count": 1, "columns": ["value"]},
+            )
+        ]
+    )
+
+    result = AgentRunner().run(
+        spec,
+        task,
+        AgentContext(
+            route_policy=TEST_ROUTE_POLICY,
+            catalog=_coding_catalog(spec),
+            event_log=tool_context.event_log,
+            provider=provider,
+            tool_registry=ToolRegistry((cast("Tool", WriteFile()),)),
+            tool_context=tool_context,
+        ),
+    )
+
+    assert result.task_status is TaskStatus.FAILED
+    assert len(provider.calls) == 3
+    assert not any(
+        event.type is EventType.HUMAN_APPROVAL_REQUESTED
+        for event in tool_context.event_log.events()
+    )
+    assert not any(
+        event.type is EventType.AGENT_COMPLETED
+        and "same syntactically invalid source twice" in event.payload.get("reason", "")
+        for event in tool_context.event_log.events()
+    )
+
+
+def test_same_invalid_python_source_can_fail_at_two_distinct_registered_paths(
+    tmp_path: Path,
+) -> None:
+    run_id = new_id("run")
+    task = Task(
+        id=new_id("task"),
+        run_id=run_id,
+        agent_id=new_id("agent"),
+        objective="Prepare two independent Python sources.",
+    )
+    tool_context = _tool_context(tmp_path, run_id=run_id)
+    spec = AgentSpec(
+        name="coding",
+        role=Role.AGENT,
+        task_kinds=("code",),
+        tool_allowlist=("write_file",),
+        max_turns=4,
+        max_depth=1,
+        system_prompt_ref="prompts/coding.md",
+        output_schema_ref="tests.thymira.fixtures_agent_output:DataProfileOutput",
+    )
+    invalid_source = "x = 1\\ny = 2"
+    provider = ScriptedProvider(
+        [
+            LLMToolCall(
+                id="analysis-source",
+                name="write_file",
+                arguments={
+                    "path": "analysis.py",
+                    "content": invalid_source,
+                    "kind": "code",
+                    "description": "Register the analysis source.",
+                },
+            ),
+            LLMToolCall(
+                id="independent-source",
+                name="write_file",
+                arguments={
+                    "path": "independent.py",
+                    "content": invalid_source,
+                    "kind": "code",
+                    "description": "Register an independent source.",
+                },
+            ),
+            LLMToolCall(
+                id="final",
+                name="final_result",
+                arguments={"row_count": 1, "columns": ["value"]},
+            ),
+        ]
+    )
+
+    result = AgentRunner().run(
+        spec,
+        task,
+        AgentContext(
+            route_policy=TEST_ROUTE_POLICY,
+            catalog=_coding_catalog(spec),
+            event_log=tool_context.event_log,
+            provider=provider,
+            tool_registry=ToolRegistry((cast("Tool", WriteFile()),)),
+            tool_context=tool_context,
+        ),
+    )
+
+    events = tool_context.event_log.events()
+    assert result.task_status is TaskStatus.FAILED
+    assert len(provider.calls) == 3
+    failures = [
+        event
+        for event in events
+        if event.type is EventType.TOOL_COMPLETED and event.payload.get("tool") == "write_file"
+    ]
+    assert [event.payload["arguments"]["path"] for event in failures] == [
+        "analysis.py",
+        "independent.py",
+    ]
+    assert not any(
+        event.type is EventType.AGENT_COMPLETED
+        and "same syntactically invalid source twice" in event.payload.get("reason", "")
+        for event in events
+    )
+
+
+def test_run_python_retry_limit_survives_another_tool_approval_resume(tmp_path: Path) -> None:
+    run_id = new_id("run")
+    task = Task(
+        id=new_id("task"),
+        run_id=run_id,
+        agent_id=new_id("agent"),
+        objective="Run the analysis.",
+    )
+    source = "print('before')\\nprint('after')"
+    tool_context = review_gated_context(tmp_path, run_id=run_id)
+    scoped_context = replace(tool_context, agent_id=task.agent_id, task_id=task.id)
+    echo = FakeTool(
+        "echo", ToolCapability(id="echo", external_effects=()), arguments_model=EchoArguments
+    )
+    spec = AgentSpec(
+        name="coding",
+        role=Role.AGENT,
+        task_kinds=("code",),
+        tool_allowlist=("run_python", "echo"),
+        max_turns=4,
+        max_depth=1,
+        system_prompt_ref="prompts/coding.md",
+        output_schema_ref="tests.thymira.fixtures_agent_output:DataProfileOutput",
+    )
+    catalog = _coding_catalog(spec)
+    registry = ToolRegistry((cast("Tool", RunPython()), echo))
+    first_provider = ScriptedProvider(
+        [
+            LLMToolCall(
+                id="call-1",
+                name="run_python",
+                arguments={"code": source, "description": "test invalid syntax"},
+            ),
+            LLMToolCall(id="call-2", name="echo", arguments={"value": "continue"}),
+        ]
+    )
+
+    parked = AgentRunner().run(
+        spec,
+        task,
+        AgentContext(
+            route_policy=TEST_ROUTE_POLICY,
+            catalog=catalog,
+            event_log=tool_context.event_log,
+            provider=first_provider,
+            tool_registry=registry,
+            tool_context=tool_context,
+        ),
+    )
+
+    assert parked.task_status is TaskStatus.PENDING
+    assert len(first_provider.calls) == 2
+    decision_id = next(
+        event.payload["decision_id"]
+        for event in tool_context.event_log.events()
+        if event.type is EventType.HUMAN_APPROVAL_REQUESTED
+    )
+    tool_context.event_log.append(
+        EventType.HUMAN_APPROVAL,
+        Actor(kind=ActorKind.HUMAN, id="reviewer", authenticated=True),
+        {"decision_id": decision_id, "approved": True, "automatic": False},
+        subject_id=decision_id,
+    )
+    lookup = load_pending_resume(
+        tool_context.artifact_store,
+        scoped_context,
+        task.agent_id,
+        task_id=task.id,
+    )
+    assert lookup.status is ResumeStatus.READY
+    assert lookup.resume is not None
+    next_provider = ScriptedProvider(
+        [
+            LLMToolCall(
+                id="call-3",
+                name="run_python",
+                arguments={"code": source, "description": "test invalid syntax"},
+            ),
+            LLMToolCall(
+                id="call-4",
+                name="final_result",
+                arguments={"row_count": 1, "columns": ["value"]},
+            ),
+        ]
+    )
+
+    result = AgentRunner().run(
+        spec,
+        task,
+        AgentContext(
+            route_policy=TEST_ROUTE_POLICY,
+            catalog=catalog,
+            event_log=tool_context.event_log,
+            provider=next_provider,
+            tool_registry=registry,
+            tool_context=tool_context,
+        ),
+        resume=lookup.resume,
+    )
+
+    assert result.task_status is TaskStatus.FAILED
+    assert len(next_provider.calls) == 1
+    assert echo.seen_invocation[0].task_id == task.id
+    events = tool_context.event_log.events()
+    approval = next(event for event in events if event.type is EventType.HUMAN_APPROVAL_REQUESTED)
+    pending_echo = next(
+        event
+        for event in events
+        if event.type is EventType.TOOL_DENIED
+        and event.payload.get("tool") == "echo"
+        and event.payload.get("decision_id") == approval.payload.get("decision_id")
+    )
+    continued_echo = next(
+        event
+        for event in events
+        if event.type is EventType.TOOL_STARTED
+        and event.payload.get("tool") == "echo"
+        and event.seq > pending_echo.seq
+    )
+    assert continued_echo.payload["decision_id"] == approval.payload["decision_id"]
+    assert (
+        continued_echo.payload["tool_intent_sha256"] == pending_echo.payload["tool_intent_sha256"]
+    )
+    syntax_call_ids = [
+        event.payload["tool_call_id"]
+        for event in events
+        if event.type is EventType.TOOL_COMPLETED and event.payload.get("tool") == "run_python"
+    ]
+    assert len(syntax_call_ids) == 2
+    assert syntax_call_ids[0] != syntax_call_ids[1]
+    assert sum(event.type is EventType.HUMAN_APPROVAL_REQUESTED for event in events) == 1
+    completed = next(event for event in reversed(events) if event.type is EventType.AGENT_COMPLETED)
+    assert "same syntactically invalid source twice" in completed.payload["reason"]
+
+
+def test_a_changed_run_python_source_is_not_blocked_by_the_repeat_limit(tmp_path: Path) -> None:
+    run_id = new_id("run")
+    task = Task(
+        id=new_id("task"),
+        run_id=run_id,
+        agent_id=new_id("agent"),
+        objective="Run the analysis.",
+    )
+    broken_source = "print('before')\\nprint('after')"
+    fixed_source = "print('fixed')"
+    tool_context = _tool_context(tmp_path, run_id=run_id)
+    run_python = FakeTool(
+        "run_python",
+        ToolCapability(id="run_python", external_effects=()),
+        arguments_model=RunPythonArguments,
+        result=ToolResult(success=True, stdout="fixed", value=LegacyToolValue(text="fixed")),
+    )
+    spec = AgentSpec(
+        name="coding",
+        role=Role.AGENT,
+        task_kinds=("code",),
+        tool_allowlist=("run_python",),
+        max_turns=4,
+        max_depth=1,
+        system_prompt_ref="prompts/coding.md",
+        output_schema_ref="tests.thymira.fixtures_agent_output:DataProfileOutput",
+    )
+    provider = ScriptedProvider(
+        [
+            LLMToolCall(
+                id="call-1",
+                name="run_python",
+                arguments={"code": broken_source, "description": "test invalid syntax"},
+            ),
+            LLMToolCall(
+                id="call-2",
+                name="run_python",
+                arguments={"code": fixed_source, "description": "fixed source"},
+            ),
+            LLMToolCall(
+                id="call-3",
+                name="final_result",
+                arguments={"row_count": 1, "columns": ["value"]},
+            ),
+        ]
+    )
+
+    result = AgentRunner().run(
+        spec,
+        task,
+        AgentContext(
+            route_policy=TEST_ROUTE_POLICY,
+            catalog=_coding_catalog(spec),
+            event_log=tool_context.event_log,
+            provider=provider,
+            tool_registry=ToolRegistry((run_python,)),
+            tool_context=tool_context,
+        ),
+    )
+
+    # The changed inline source reaches RunPython (so the repeat guard permits the correction),
+    # but without a registered logical source or required output the final success cannot claim
+    # that the earlier failed inline attempt was repaired.
+    assert result.task_status is TaskStatus.FAILED
+    assert len(provider.calls) == 3
+    assert [item["code"] for item in run_python.seen_arguments] == [fixed_source]
+    successful_run = [
+        event
+        for event in tool_context.event_log.events()
+        if event.type is EventType.TOOL_COMPLETED
+        and event.payload.get("tool") == "run_python"
+        and event.payload.get("status") == ToolCallStatus.COMPLETED.value
+    ]
+    assert len(successful_run) == 1
+    completion = [
+        event
+        for event in tool_context.event_log.events()
+        if event.type is EventType.AGENT_COMPLETED
+    ][-1]
+    assert completion.payload["status"] == TaskStatus.FAILED.value
+    unresolved_call_ids = completion.payload["completion_evidence"]["unresolved_tool_call_ids"]
+    assert len(unresolved_call_ids) == 1
+
+
+def test_retry_history_does_not_count_successful_stdout_that_mentions_syntax() -> None:
+    source = "print('invalid Python syntax at line 1')"
+    messages = [
+        ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="run_python",
+                    args={"code": source},
+                    tool_call_id="call-1",
+                )
+            ]
+        ),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="run_python",
+                    content="invalid Python syntax at line 1",
+                    tool_call_id="call-1",
+                    metadata={TOOL_RETURN_SUCCESS_METADATA_KEY: True},
+                )
+            ]
+        ),
+        ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="run_python",
+                    args={"code": source},
+                    tool_call_id="call-2",
+                )
+            ]
+        ),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="run_python",
+                    content="invalid Python syntax at line 1",
+                    tool_call_id="call-2",
+                    metadata={TOOL_RETURN_SUCCESS_METADATA_KEY: True},
+                )
+            ]
+        ),
+    ]
+
+    assert invalid_python_source_counts(messages) == {}
+    assert repeated_invalid_python_source_reason(messages) is None
 
 
 def test_a_review_required_denial_ends_the_step_pending_with_a_paired_lifecycle(

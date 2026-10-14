@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import traceback
 from types import SimpleNamespace
 from typing import Any, ClassVar, cast
 
@@ -194,8 +195,9 @@ def test_litellm_reports_a_gateway_failure_without_a_litellm_exceptions_namespac
     """A gateway double that raises reports its own error, not a missing `exceptions` attribute."""
     log = _log()
     capture: list[dict[str, Any]] = []
+    gateway_message = "gateway is down"
     provider = _fake_litellm_provider(
-        RequestLedger(log), capture, completion_error=RuntimeError("gateway is down")
+        RequestLedger(log), capture, completion_error=RuntimeError(gateway_message)
     )
     # The double otherwise carries an `exceptions` namespace for the other gateway-error tests;
     # this test specifically proves the fallback when a gateway double exposes none.
@@ -204,8 +206,19 @@ def test_litellm_reports_a_gateway_failure_without_a_litellm_exceptions_namespac
     with pytest.raises(LLMCallError, match="call to the LLM provider failed") as failure:
         provider.complete("question", system="instructions")
 
-    assert isinstance(failure.value.__cause__, RuntimeError)
-    assert str(failure.value.__cause__) == "gateway is down"
+    rendered_traceback = "".join(traceback.format_exception(failure.value))
+    assert failure.value.__cause__ is None
+    assert failure.value.__suppress_context__
+    assert gateway_message not in rendered_traceback
+    assert len(capture) == 1
+    report = replay_request_ledger(tuple(log.events()))
+    assert len(report.responses) == 1
+    assert report.responses[0].outcome is ResponseOutcome.PROVIDER_ERROR
+    terminal = log.events()[-1].payload["terminal"]
+    assert terminal["outcome"] == ResponseOutcome.PROVIDER_ERROR.value
+    assert terminal["error_code"] == "provider_error"
+    assert len(terminal["error_digest"]) == 64
+    assert gateway_message not in str([event.payload for event in log.events()])
 
 
 def test_recording_provider_captures_structured_schema_and_tool_turn() -> None:
@@ -530,6 +543,7 @@ def test_request_replay_refuses_a_surface_with_an_unknown_operation() -> None:
     log = _log()
     ledger = RequestLedger(log)
     event = ledger.append_surface((), owner_id="agent_test")
+    assert isinstance(event, Event)
     forged = event.model_copy(update={"payload": {**event.payload, "operation": "merge"}})
 
     with pytest.raises(RequestReplayError):

@@ -15,17 +15,31 @@ went through the Tool Manager pipeline regardless of outcome — charges one aga
 
 from __future__ import annotations
 
+import hashlib
+import json
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from pydantic_ai import ApprovalRequired, Tool, ToolReturn
+from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, ToolReturnPart
 
 from thymira.agents.history import TOOL_RETURN_SUCCESS_METADATA_KEY
 from thymira.agents.prompt_framing import frame_untrusted
+from thymira.agents.retry_policy import (
+    MAX_IDENTICAL_INVALID_PYTHON_FAILURES,
+    RepeatedInvalidPythonSourceError,
+    RepeatedPythonPublicationError,
+    retry_stop_for_task,
+)
 from thymira.observability import tool as tool_observation
 from thymira.schemas import EventType, ToolCallStatus
 from thymira.tools import ToolExecution, ToolManager, canonical_value, input_schema, value_text
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from pydantic_ai.messages import ModelMessage
+
     from thymira.agents.spec import AgentSpec
     from thymira.agents.usage import RunUsage
     from thymira.tools import Tool as ToolContract
@@ -35,6 +49,82 @@ DENIED_MARKER = "[denied]"
 """The last line of every denied call's rendering: the fact the model anchors on to tell "not
 allowed" from "failed". A denied call is not retried unchanged; the agent adapts or reports."""
 
+_PYTHON_SYNTAX_PREFLIGHT_PREFIX = (
+    "invalid arguments for tool 'run_python': code: Value error, invalid Python syntax at line "
+)
+
+
+def invalid_python_source_counts(messages: Sequence[ModelMessage]) -> dict[str, int]:
+    """Count exact-source ``run_python`` syntax failures in verified conversation history."""
+    sources: dict[str, str] = {}
+    counts: dict[str, int] = {}
+    for message in messages:
+        if isinstance(message, ModelResponse):
+            for part in message.parts:
+                if not isinstance(part, ToolCallPart) or part.tool_name != "run_python":
+                    continue
+                arguments = _tool_call_arguments(part)
+                identity = _python_source_identity(arguments)
+                if identity is not None:
+                    sources[part.tool_call_id] = identity
+        elif isinstance(message, ModelRequest):
+            for part in message.parts:
+                if (
+                    not isinstance(part, ToolReturnPart)
+                    or part.tool_name != "run_python"
+                    or not _is_invalid_python_syntax_return(part)
+                ):
+                    continue
+                digest = sources.pop(part.tool_call_id, None)
+                if digest is not None:
+                    counts[digest] = counts.get(digest, 0) + 1
+    return counts
+
+
+def repeated_invalid_python_source_reason(messages: Sequence[ModelMessage]) -> str | None:
+    """Return the terminal diagnostic if a restored conversation already hit the limit."""
+    if any(
+        count >= MAX_IDENTICAL_INVALID_PYTHON_FAILURES
+        for count in invalid_python_source_counts(messages).values()
+    ):
+        return str(RepeatedInvalidPythonSourceError())
+    return None
+
+
+def _tool_call_arguments(part: ToolCallPart) -> dict[str, Any] | None:
+    """Decode a source call's object arguments without accepting non-object payloads."""
+    if isinstance(part.args, dict):
+        return part.args
+    if not isinstance(part.args, str):
+        return None
+    try:
+        parsed = json.loads(part.args)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _python_source_identity(arguments: dict[str, Any] | None) -> str | None:
+    """Identify exact inline bytes or one immutable registered source revision."""
+    if arguments is None:
+        return None
+    source_id = arguments.get("source_artifact_id")
+    if isinstance(source_id, str) and source_id:
+        return "artifact:" + source_id
+    code = arguments.get("code")
+    return hashlib.sha256(code.encode("utf-8")).hexdigest() if isinstance(code, str) else None
+
+
+def _is_invalid_python_syntax_return(part: ToolReturnPart) -> bool:
+    """Require runtime-confirmed failure metadata plus the exact argument-parser diagnostic."""
+    metadata = part.metadata
+    return (
+        isinstance(metadata, Mapping)
+        and metadata.get(TOOL_RETURN_SUCCESS_METADATA_KEY) is False
+        and isinstance(part.content, str)
+        and _PYTHON_SYNTAX_PREFLIGHT_PREFIX in part.content
+    )
+
 
 def build_agent_tools(
     spec: AgentSpec,
@@ -42,6 +132,7 @@ def build_agent_tools(
     context: ToolContext,
     *,
     usage: RunUsage | None = None,
+    message_history: Sequence[ModelMessage] = (),
 ) -> tuple[Tool[None], ...]:
     """Build the PydanticAI tools `spec.tool_allowlist` authorizes, bound to one `ToolContext`.
 
@@ -50,10 +141,21 @@ def build_agent_tools(
             mismatch this refuses to paper over by silently registering fewer tools than declared.
     """
     manager = ToolManager(registry)
+    # Keep the public history argument for compatibility with callers. Retry enforcement is
+    # reconstructed from task-scoped terminal events by the shared policy below.
+    del message_history
     tools: list[Tool[None]] = []
     for tool_name in spec.tool_allowlist:
         registered_tool = registry.get(tool_name)
-        tools.append(_build_one_tool(manager, context, registered_tool, usage))
+        tools.append(
+            _build_one_tool(
+                manager,
+                context,
+                registry,
+                registered_tool,
+                usage,
+            )
+        )
     return tuple(tools)
 
 
@@ -125,7 +227,11 @@ def render_tool_output(execution: ToolExecution) -> str:
 
 
 def _build_one_tool(
-    manager: ToolManager, context: ToolContext, tool: ToolContract, usage: RunUsage | None
+    manager: ToolManager,
+    context: ToolContext,
+    registry: ToolRegistry,
+    tool: ToolContract,
+    usage: RunUsage | None,
 ) -> Tool[None]:
     tool_name = tool.name
 
@@ -149,6 +255,23 @@ def _build_one_tool(
                         **identity,
                     }
                 )
+            if (
+                tool_name in {"run_python", "write_file"}
+                and not execution.result.success
+                and context.task_id is not None
+            ):
+                stop = retry_stop_for_task(
+                    context.event_log.events(),
+                    context.task_id,
+                    artifact_store=context.artifact_store,
+                    tool_registry=registry,
+                    tool_context=context,
+                    current_call_id=execution.call.id,
+                )
+                if stop is not None:
+                    if stop.kind == "syntax":
+                        raise RepeatedInvalidPythonSourceError(stop.reason)
+                    raise RepeatedPythonPublicationError
             return ToolReturn(
                 framed_output,
                 metadata={TOOL_RETURN_SUCCESS_METADATA_KEY: execution.result.success},
@@ -186,4 +309,12 @@ def _pending_tool_identity(context: ToolContext, tool_call_id: str) -> dict[str,
     return {"tool_intent_sha256": ticket, "sandbox_mode": mode}
 
 
-__all__ = ["DENIED_MARKER", "build_agent_tools", "render_tool_output"]
+__all__ = [
+    "DENIED_MARKER",
+    "MAX_IDENTICAL_INVALID_PYTHON_FAILURES",
+    "RepeatedInvalidPythonSourceError",
+    "build_agent_tools",
+    "invalid_python_source_counts",
+    "render_tool_output",
+    "repeated_invalid_python_source_reason",
+]

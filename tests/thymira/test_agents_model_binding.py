@@ -49,6 +49,24 @@ def _log() -> InMemoryEventLog:
     return InMemoryEventLog(new_id("run"))
 
 
+def test_structured_retry_delivers_validation_feedback_to_the_provider() -> None:
+    provider = ScriptedProvider([{"row_count": "wrong"}, {"row_count": 1, "columns": ["x"]}])
+    model = routed_model(
+        Role.THY,
+        "plan",
+        _log(),
+        provider=provider,
+        output_schema=DataProfileOutput,
+        route_policy=TEST_ROUTE_POLICY,
+    )
+    result = Agent(model=model, output_type=DataProfileOutput, retries=1).run_sync("Profile x")
+    assert result.output.row_count == 1
+    assert len(provider.calls) == 2
+    assert provider.calls[0]["prompt"] != provider.calls[1]["prompt"]
+    assert "row_count" in provider.calls[1]["prompt"]
+    assert "wrong" not in provider.calls[1]["prompt"]
+
+
 class _MeteredInvalidThenValidProvider(ScriptedProvider):
     """Return one metered parse failure and then one valid structured response."""
 
@@ -87,7 +105,7 @@ class _MeteredInvalidThenValidProvider(ScriptedProvider):
 
 
 class _UnsafeStructuredCauseProvider(ScriptedProvider):
-    """Expose a deliberately unsafe cause to exercise the routed provider boundary."""
+    """Return an invalid response with an unsafe cause to exercise the routed boundary."""
 
     def __init__(self, private_marker: str) -> None:
         super().__init__([])
@@ -102,8 +120,16 @@ class _UnsafeStructuredCauseProvider(ScriptedProvider):
     ) -> tuple[BaseModelT, LLMResponse]:
         self.calls.append({"prompt": prompt, "system": system, "tools": []})
         unsafe_cause = ValueError(self._private_marker)
+        response = LLMResponse(
+            text=f"not-json-{self._private_marker}",
+            provider=self.provider_name,
+            model=self.model,
+            input_tokens=7,
+            output_tokens=3,
+            cost_usd=0.04,
+        )
         raise LLMStructuredOutputError(
-            f"the response does not satisfy {schema.__name__}"
+            f"the response does not satisfy {schema.__name__}", response=response
         ) from unsafe_cause
 
 
@@ -520,12 +546,16 @@ def test_structured_parse_failure_and_retry_are_both_charged() -> None:
 def test_structured_retry_traceback_suppresses_an_unsafe_provider_cause() -> None:
     private_marker = "routed-structured-private-marker"
     provider = _UnsafeStructuredCauseProvider(private_marker)
+    usage = RunUsage()
+    recorded: list[LLMResponse] = []
     model = routed_model(
         Role.AGENT,
         "analyze",
         _log(),
         provider=provider,
         output_schema=DataProfileOutput,
+        usage=usage,
+        record_model_usage=recorded.append,
         route_policy=TEST_ROUTE_POLICY,
     )
 
@@ -537,6 +567,15 @@ def test_structured_retry_traceback_suppresses_an_unsafe_provider_cause() -> Non
     rendered_traceback = "".join(traceback.format_exception(exc_info.value))
     assert private_marker not in rendered_traceback
     assert "the response does not satisfy DataProfileOutput" in rendered_traceback
+    assert len(provider.calls) == 1
+    assert usage.requests == 1
+    assert usage.input_tokens == 7
+    assert usage.output_tokens == 3
+    assert usage.cost_usd == pytest.approx(0.04)
+    assert len(recorded) == 1
+    assert recorded[0].input_tokens == 7
+    assert recorded[0].output_tokens == 3
+    assert recorded[0].cost_usd == pytest.approx(0.04)
 
 
 def test_output_tool_validation_traceback_does_not_expose_arguments() -> None:

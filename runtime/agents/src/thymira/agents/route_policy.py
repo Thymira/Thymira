@@ -9,6 +9,7 @@ from thymira.schemas import Actor, EventType, ModelRoutePolicy
 if TYPE_CHECKING:
     from thymira.agents.llm.routing import ModelChoice
     from thymira.events import EventLog
+    from thymira.events.provider_evidence import ProviderEvidenceLog
 
 
 class ModelRouteDeniedError(RuntimeError):
@@ -62,7 +63,7 @@ def enforce_model_route(
     choice: ModelChoice,
     policy: ModelRoutePolicy | None,
     *,
-    event_log: EventLog | None = None,
+    event_log: ProviderEvidenceLog | None = None,
     actor: Actor | None = None,
     subject_id: str | None = None,
 ) -> None:

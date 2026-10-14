@@ -35,6 +35,8 @@ from thymira.agents.llm.litellm_provider import (
     MODEL_ENV_VAR,
     REASONING_EFFORT_ENV_VAR,
     LiteLLMProvider,
+    estimate_structured_input_tokens,
+    estimate_text_tokens,
 )
 from thymira.agents.llm.proxy import resolve_proxy_endpoint
 from thymira.agents.llm.routing import (
@@ -136,6 +138,8 @@ __all__ = [
     "ScriptedProvider",
     "TaskKind",
     "choose",
+    "estimate_structured_input_tokens",
+    "estimate_text_tokens",
     "get_provider",
     "resolve_model",
     "resolve_proxy_endpoint",
