@@ -123,3 +123,7 @@ desktop.ini
 # under a project-relative tmp root, never test fixtures.
 .codex/pytest-audit-*/
 .codex/roster-drift-*/
+
+# Local examples and investigation material
+/examples/
+/diagnostics/

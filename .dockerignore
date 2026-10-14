@@ -8,6 +8,10 @@ venv
 **/*.py[cod]
 .pytest_cache
 .pytest-*
+.pytest_tmp*
+tmp_review*
+NUL
+diagnostics
 .hypothesis
 .ruff_cache
 .import_linter_cache
