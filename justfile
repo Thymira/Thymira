@@ -36,20 +36,17 @@ lock-check:
 [group("quality")]
 [doc("Format code with ruff")]
 fmt:
-    uv run ruff format .
+    uv run python scripts/check_quality.py format
 
 [group("quality")]
-[doc("Lint: ruff check, ruff format --check, yamllint")]
+[doc("Lint owned source/config inputs: ruff check, format check, yamllint")]
 lint:
-    uv run ruff check .
-    uv run ruff format --check .
-    uv run yamllint .
+    uv run python scripts/check_quality.py check
 
 [group("quality")]
 [doc("Apply safe ruff fixes and format")]
 lint-fix:
-    uv run ruff check --fix .
-    uv run ruff format .
+    uv run python scripts/check_quality.py fix
 
 [group("quality")]
 [doc("Type-check with ty (full report)")]

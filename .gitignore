@@ -32,6 +32,9 @@ docker-compose.override.yml
 # ------------------------------------------------------------- tool caches
 .pytest_cache/
 .pytest-*/
+.pytest_tmp*/
+/tmp_review*/
+/NUL
 .hypothesis/
 .ruff_cache/
 .import_linter_cache/
